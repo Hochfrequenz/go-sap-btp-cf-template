@@ -5,7 +5,7 @@ go 1.26
 require (
 	github.com/MicahParks/keyfunc/v3 v3.3.5
 	github.com/cloudfoundry-community/go-cfenv v1.18.0
-	github.com/corbym/gocrest v1.2.0
+	github.com/corbym/gocrest v1.2.1
 	github.com/gin-gonic/gin v1.10.0
 	github.com/golang-jwt/jwt/v5 v5.2.1
 	golang.org/x/sync v0.20.0
