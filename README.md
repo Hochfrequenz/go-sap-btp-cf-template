@@ -120,13 +120,52 @@ That's the whole wiring. For a pure pass-through (no pre/post-processing), the e
 
 Unit-test the handler with the fixtures in `internal/btp/service_test.go`; they stand up stubs that respond like the real XSUAA / Destination / CC stack, so you can assert request shape and response translation without deploying.
 
+### Validate and sanitise at the Gin layer, not in SAP
+
+Sanitising a bad payload in ABAP is painful — data-type shaping is verbose, exception handling is heavy, and you cannot easily test an error path without a full transport-request round-trip. The same sanitising in Go is a struct tag and one line. Put the discipline as far to the left as possible.
+
+Rule of thumb: **every byte that reaches `svc.CallOnPremise` has already passed type checks, required-field checks, format and range checks, and enum-value checks in the Gin handler**. If a request can fail validation, it fails here — with a `400` and a clear message — not on the SAP side with a Short Dump.
+
+```go
+type invoiceSyncRequest struct {
+    CompanyCode string    `json:"company_code" binding:"required,len=4,uppercase"`
+    PostingDate time.Time `json:"posting_date" binding:"required"`
+    AmountCents int64     `json:"amount_cents" binding:"required,min=1"`
+    Currency    string    `json:"currency"     binding:"required,oneof=EUR USD GBP"`
+    Reference   string    `json:"reference"    binding:"max=16"`
+}
+
+func invoiceSyncHandler(svc *btp.Service) gin.HandlerFunc {
+    return func(c *gin.Context) {
+        var req invoiceSyncRequest
+        if err := c.ShouldBindJSON(&req); err != nil {
+            c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+            return
+        }
+        // From here on, every field is typed and within contract. Only
+        // after this line does the caller's payload deserve to see the
+        // on-prem system.
+        body, _ := json.Marshal(toABAPPayload(req))
+        // ... svc.CallOnPremise(..., bytes.NewReader(body)) ...
+    }
+}
+```
+
+Gin's binding uses [`go-playground/validator`](https://github.com/go-playground/validator); the tag vocabulary covers required / length / regex / enum / cross-field rules (`required_with`, `gtfield`, etc.). For shape-checks beyond the tag language, add an explicit `Validate()` method on the request type and call it right after `ShouldBindJSON`.
+
+Two things to apply the same discipline to, that are easy to forget:
+
+- **Query and path parameters.** `c.ShouldBindQuery(&req)` and `c.ShouldBindUri(&req)` take the same struct-tag rules. Do not read raw `c.Query("amount")` and pass it on.
+- **`interface{}` or `json.RawMessage` in a payload.** If the shape genuinely varies, wrap with a typed envelope that selects the variant, validate the envelope, then parse the raw field once the variant is known. An `interface{}` that travels to `svc.CallOnPremise` is a gift to SAP's Short-Dump generator.
+
 ### What you do NOT need to understand
 
 The middleware and service code hide most of the BTP specifics. Unless you hit a bug or an edge, you can safely ignore:
 
 - what XSUAA emits as `aud` and `iss` (the middleware validates signature, audience, expiry; invariants are in `internal/btp/auth.go`),
 - how the three-leg token dance is sequenced (`internal/btp/service.go`),
-- which headers `skipForwardedHeader` strips on forwarding (hop-by-hop, `Authorization`, `Cookie`, `Host` — the authenticator sets a fresh Authorization from the Destination).
+- which headers `skipForwardedHeader` strips on forwarding (hop-by-hop, `Authorization`, `Cookie`, `Host` — the authenticator sets a fresh Authorization from the Destination),
+- path-traversal defence — `Service.CallOnPremise` rejects `..` in the path suffix before anything leaves the process, so a handler can accept a path segment from the caller without building that check again itself.
 
 If you do hit a wall, see "How it works under the hood" near the bottom of this README.
 
