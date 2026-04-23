@@ -70,6 +70,32 @@ Procfile, .cfignore
 vars.example.yml            template for cf push --vars-file vars.yml
 ```
 
+## Using this repo as a template
+
+All per-deployment string values (app name, Go module path, CF subaccount coordinates, service instance names) live in a single `config.yml` at the repo root. `cmd/apply-config` is a small Go tool that reads that file, type-checks every field, and rewrites the rest of the tree from it — `go.mod`, every Go import, `manifest.yml`, `xs-security.json`, `vars.example.yml`, `web/package.json`, and `.github/workflows/deploy.yml`.
+
+Recommended flow after forking:
+
+```sh
+gh repo create my-org/my-app --template Hochfrequenz/go-sap-btp-cloud-foundry-mwe
+cd my-app
+$EDITOR config.yml                            # adjust app.name, app.module, cf.* etc.
+
+go run ./cmd/apply-config --dry-run           # preview every planned change
+go run ./cmd/apply-config                     # apply to the tree
+go test ./...                                 # sanity check
+git add -A && git commit -m "chore: configure fork"
+```
+
+Properties of the tool:
+
+- **Typed.** `config.yml` is parsed into a Go struct with aggregated validation — all problems reported in one run, same pattern as `internal/btp/env.go`.
+- **Idempotent.** Running twice with an unchanged `config.yml` is a no-op. CI can enforce that with `go run ./cmd/apply-config --check` (exit 1 if the tree drifts from the config).
+- **Fails loudly.** Each file rewriter asserts its expected shape; a drifted target returns a clear error instead of silently producing garbage.
+- **Zero internal dependencies.** The tool imports nothing from `internal/`, so it keeps working even while it's rewriting import paths.
+
+`README.md` and `docs/btp-deploy-walkthrough.de.md` are **not** rewritten by the tool — they describe the original Hochfrequenz deployment and are meant to read as HF-flavoured prose. Strip or replace them in your fork as you see fit.
+
 ## Deployment
 
 ### Prerequisites
