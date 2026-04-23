@@ -1,0 +1,49 @@
+---
+# cf push -f manifest.yml --vars-file vars.yml
+# (or) cf push --var domain=cfapps.eu10.hana.ondemand.com --var backend-host=go-btp-mwe
+#
+# The approuter needs the backend's public URL baked into its `destinations`
+# env var. CF manifest vars keep us from hard-coding the region/account.
+applications:
+
+  # Go backend — talks to the on-premise SAP system. Not meant to be hit
+  # directly by end users; the approuter is the public entry point.
+  #
+  # We let the Go buildpack pick its defaults: it reads go.mod, discovers
+  # `cmd/server` automatically, and names the resulting binary `server`
+  # (matched by Procfile). Unverified against the Paketo go buildpack —
+  # see https://github.com/Hochfrequenz/go-sap-btp-cloud-foundry-mwe/issues
+  # for the open question about which buildpack HF's BTP landscape uses.
+  - name: ((backend-host))
+    path: .
+    memory: 128M
+    disk_quota: 256M
+    instances: 1
+    buildpacks:
+      - go_buildpack
+    env:
+      GIN_MODE: release
+    services:
+      - go-xsuaa
+      - go-dest
+      - go-cc
+
+  # SAP approuter — the browser-facing front door. Runs OAuth auth-code flow
+  # against XSUAA and forwards the resulting JWT to the Go backend via the
+  # JSON-defined destination below.
+  - name: ((backend-host))-web
+    path: web
+    memory: 128M
+    disk_quota: 256M
+    instances: 1
+    buildpacks:
+      - nodejs_buildpack
+    env:
+      destinations: >
+        [
+          { "name": "GoBackend",
+            "url":  "https://((backend-host)).((domain))",
+            "forwardAuthToken": true }
+        ]
+    services:
+      - go-xsuaa
