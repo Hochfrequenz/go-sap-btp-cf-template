@@ -9,11 +9,8 @@ applications:
   # Go backend — talks to the on-premise SAP system. Not meant to be hit
   # directly by end users; the approuter is the public entry point.
   #
-  # We let the Go buildpack pick its defaults: it reads go.mod, discovers
-  # `cmd/server` automatically, and names the resulting binary `server`
-  # (matched by Procfile). Unverified against the Paketo go buildpack —
-  # see https://github.com/Hochfrequenz/go-sap-btp-cloud-foundry-mwe/issues
-  # for the open question about which buildpack HF's BTP landscape uses.
+  # Classic CF go_buildpack does NOT auto-discover subpackages; GO_INSTALL_PACKAGE_SPEC
+  # tells it where main lives. The Procfile then runs the resulting `server` binary.
   - name: ((backend-host))
     path: .
     memory: 128M
@@ -23,6 +20,7 @@ applications:
       - go_buildpack
     env:
       GIN_MODE: release
+      GO_INSTALL_PACKAGE_SPEC: ./cmd/server
     services:
       - go-xsuaa
       - go-dest
