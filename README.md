@@ -209,14 +209,50 @@ BTP cockpit → subaccount → Connectivity → **Destinations** → New Destina
 
 Once this exists, `https://<approuter-host>.<domain>/api/sap/HfSap/<path>` will work. Until it does, `/api/sap/HfSap/...` returns 502 from the Go backend.
 
-### 6. Smoke test
+### 6. Smoke tests
+
+Run the three checks in order. If one fails, the earlier ones still isolate where in the chain things broke.
+
+Substitute `<approuter-host>` and `<domain>` for your deploy (from step 3 — typically `go-btp-mwe-web` and e.g. `cfapps.eu10.hana.ondemand.com`).
+
+#### 6a. `/healthz` — approuter reaches the Go backend
 
 ```sh
-# The approuter will bounce you through XSUAA login in a browser the first time.
-curl -L https://<approuter-host>.<domain>/api/me
+curl -i https://<approuter-host>.<domain>/healthz
 ```
 
-`/api/me` echoes the validated JWT claims — handy to verify 5a + 5b before moving on to 5c.
+Expected: `HTTP/1.1 200 OK` with body `ok`. `/healthz` is explicitly marked `authenticationType: none` in `web/xs-app.json`, so this proves the approuter is up and forwarding without needing auth. If this fails, the approuter or backend didn't start — check `cf app <backend-host>` and `cf app <approuter-host>`.
+
+#### 6b. `/api/me` — full OAuth + JWT-validation chain
+
+```sh
+# Open in a browser (cookie-based session); curl alone can't complete the SSO dance:
+open "https://<approuter-host>.<domain>/api/me"
+```
+
+Expected: a JSON body with a `claims` object — your `email`, `given_name`, `family_name`, `scope`, and `xs.system.attributes.xs.rolecollections`. This exercises the approuter's XSUAA auth-code flow, the Go backend's JWKS-pinned signature verification, and the `aud` / exp / leeway checks in `internal/btp/auth.go`.
+
+A `401 invalid token: ... invalid audience` here points at section 7 of this deployment's tracking issue — XSUAA emits `aud` in the `sb-<xsappname>!t<tenant>` (`ClientID`) form, not bare `<xsappname>`.
+
+#### 6c. `/api/sap/<destination-name>/sap/bc/adt/discovery` — full three-leg call to on-prem
+
+```sh
+# Curl works if you have a valid approuter session cookie; otherwise use a browser
+# (and look at the download it offers — the XML body is the success signal).
+curl -L -b <session-cookies> \
+  https://<approuter-host>.<domain>/api/sap/<destination-name>/sap/bc/adt/discovery
+```
+
+Expected: `200 application/atomsvc+xml` with a body starting `<?xml version="1.0" ... <app:service ...>`. That one call exercises the destination-service lookup, both XSUAA `client_credentials` fetches, the Cloud Connector proxy tunnel, and Basic Auth against the on-premise SAP system — in the three-leg sequence described in the architecture diagram above.
+
+Why `/sap/bc/adt/discovery` as the probe: it's a standard ABAP Development Tools endpoint (used by [`Hochfrequenz/adtler`](https://github.com/Hochfrequenz/adtler) as the CSRF-preflight target), available on any ADT-enabled S/4 system, and reachable by any authenticated ADT developer user — so it rarely trips on fine-grained authorization. If your destination points at a non-S/4 system (for example a HANA XS-only host), substitute an endpoint your destination user has read access to.
+
+Common failure modes, in the order they get more annoying to diagnose:
+
+- `404` from the approuter: the backend isn't bound to the destination `GoBackend` that `web/xs-app.json` references, or the backend crashed. `cf logs <backend-host> --recent`.
+- `401 invalid audience` or `... invalid issuer`: section 7. The JWT middleware expects a token shape XSUAA does not emit. Fix is in `internal/btp/auth.go`.
+- `502` from the Go backend: the destination lookup succeeded but the on-premise call failed. Most common causes: the destination's virtual host is not exposed by the Cloud Connector, or the Cloud Connector is red.
+- `403` with an SAP-branded body: the destination's stored user authenticated successfully but does not have authorization for the path you chose. Switch the path, not the destination.
 
 ## Local development
 
