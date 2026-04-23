@@ -3,7 +3,7 @@
 A minimal working example of a Go webservice that:
 
 - runs on **SAP BTP Cloud Foundry** (two apps: Go backend + SAP approuter),
-- authenticates users via **XSUAA** (full JWKS-based JWT validation: signature, issuer, audience, expiry),
+- authenticates users via **XSUAA** (JWKS-pinned JWT validation: RS256 signature, audience, expiry — see `internal/btp/auth.go` for why issuer is intentionally not checked),
 - calls an **on-premise SAP system** through the **Connectivity + Destination** services (the Cloud Connector three-leg dance),
 - is built on **Gin** and structured for extension toward Auth0 / SSO / Principal Propagation without rewrites.
 
@@ -23,13 +23,13 @@ sequenceDiagram
     participant CC as Cloud<br/>Connector
     participant SAP as On-premise<br/>SAP system
 
-    Browser->>AR: GET /api/sap/HfSap/...
+    Browser->>AR: GET /api/sap/<destination>/...
     AR->>XSUAA: OAuth auth-code flow (first time only)
     XSUAA-->>AR: session + JWT
     AR->>Go: forward request with Authorization: Bearer <jwt>
     Go->>XSUAA: fetch JWKS (cached by keyfunc, refreshed in background)
     XSUAA-->>Go: signing keys
-    Note over Go: verify RS256 signature,<br/>issuer, audience, expiry
+    Note over Go: verify RS256 signature,<br/>audience, expiry (issuer<br/>intentionally not checked)
 
     Go->>XSUAA: client_credentials<br/>(destination service creds)
     XSUAA-->>Go: destination token
@@ -58,7 +58,7 @@ internal/btp/
   tokens.go                 XSUAA client-credentials fetcher (TTL cache, singleflight)
   destination.go            Destination-service lookup + typed AuthType/ProxyType
   proxy.go                  http.RoundTripper tunnelling via Connectivity proxy
-  auth.go                   XSUAA JWT middleware (signature, iss, aud, exp)
+  auth.go                   XSUAA JWT middleware (signature, aud, exp; see doc)
   authenticator.go          pluggable DestinationAuthenticator registry
   service.go                orchestrates the three-leg call + Gin pass-through
 web/                        SAP approuter
@@ -179,6 +179,7 @@ The shipped `xs-security.json` has an empty `redirect-uris` array — we cannot 
 1. Find the approuter route: `cf app go-btp-mwe-web` (it prints the `routes:` — note the HTTPS URL).
 2. Edit `xs-security.json` and add `"https://<approuter-host>.<domain>/**"` to `oauth2-configuration.redirect-uris`.
 3. Push the updated security config: `cf update-service go-xsuaa -c xs-security.json`.
+4. **Immediately run `git restore xs-security.json`** so your deploy-specific URL doesn't end up in a commit. `redirect-uris` lives inside XSUAA now; the file in the repo stays empty by convention, one edit per deploy, never committed.
 
 Skipping this yields "redirect URI mismatch" on the first OAuth login.
 
@@ -191,7 +192,7 @@ Skipping this yields "redirect URI mismatch" on the first OAuth login.
 3. Security → **Users** → your user → add the new Role Collection.
 4. If you were already logged in through the approuter, log out (`/logout`) and back in so the new token carries the scope.
 
-Skipping this yields HTTP 403 from `/api/*` even though login succeeds.
+The `/api/*` routes this MWE ships with do **not** enforce the `User` scope — the JWT middleware only validates signature, audience, and expiry, so a valid XSUAA user passes regardless of Role Collection. 5b matters the moment you add a scope-gated route (e.g. `c.MustGet("jwtClaims")` then checking `scope` contains `User`); without 5b, that route would 403 even though login succeeds.
 
 #### 5c. Create a Destination pointing at your on-prem system
 
@@ -253,6 +254,32 @@ Common failure modes, in the order they get more annoying to diagnose:
 - `401 invalid audience` or `... invalid issuer`: section 7. The JWT middleware expects a token shape XSUAA does not emit. Fix is in `internal/btp/auth.go`.
 - `502` from the Go backend: the destination lookup succeeded but the on-premise call failed. Most common causes: the destination's virtual host is not exposed by the Cloud Connector, or the Cloud Connector is red.
 - `403` with an SAP-branded body: the destination's stored user authenticated successfully but does not have authorization for the path you chose. Switch the path, not the destination.
+
+## Continuous deployment
+
+`.github/workflows/deploy.yml` deploys both apps on every **published GitHub Release** (not on push-to-main, not on plain tag pushes — only the explicit "Publish release" click). The workflow has two jobs:
+
+1. **`gate`** — `go vet`, `go test ./... -race`, `golangci-lint`, `gofmt --diff`. All four must pass green.
+2. **`deploy`** — only runs if `gate` was green. Cross-compiles a static Linux binary on the runner, installs `cf` v8, pushes backend via `binary_buildpack -c './bin/server'` (bypassing the stager-side Go compile which OOMs on `eu10` — see "Pre-flight gotchas" above), pushes the approuter via the manifest's `nodejs_buildpack`, then curls `/healthz` and fails the workflow if it isn't `200 ok`.
+
+### Required repository secrets
+
+| Secret | What it is |
+| --- | --- |
+| `CF_USER` | Email of a CF user with the `SpaceDeveloper` role on the deploy target space. See the caveat below — this usually needs to be a **technical user** created by a Subaccount Administrator, because SSO-only users cannot authenticate non-interactively. |
+| `CF_PASSWORD` | That user's password. |
+
+Set both at **Settings → Secrets and variables → Actions → New repository secret**. If either is missing, the deploy job fails loudly at `cf auth` instead of silently pushing with empty credentials.
+
+### Caveat on CF identity
+
+BTP subaccounts commonly enforce SAP ID Service SSO for human users, which means those users have **no usable password** for `cf login -u/-p`. The workflow needs a non-interactive credential pair, which usually means creating a dedicated CF user ("technical user") via **BTP cockpit → Security → Users → New** with a local password, then granting `SpaceDeveloper` on the target space via `cf set-space-role`. Creating the user requires Subaccount Administrator rights.
+
+The alternative — `cf login --sso` with a temporary passcode — is interactive-only and not suitable for CI.
+
+### What the manifest does vs. what CI overrides
+
+The committed `manifest.yml` still declares `buildpacks: [go_buildpack]` so a manual `cf push` from a laptop keeps working as documented. The CD workflow explicitly overrides that with `-b binary_buildpack -c './bin/server'` because classic `go_buildpack` on `eu10` OOMs while compiling the Go 1.26 toolchain against the full dependency tree, and the org-level memory quota is too tight to grow the backend's `memory:` to give the stager enough RAM. Long-term: switch the manifest default to `binary_buildpack` and commit that change once the rest of the team is ready to rebuild locally before pushing manually.
 
 ## Local development
 
