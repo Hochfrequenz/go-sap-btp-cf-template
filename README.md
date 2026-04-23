@@ -80,15 +80,18 @@ Open `cmd/server/main.go`. Routes live in `buildRouter`; the `api` group sits be
 api.POST("/invoice-sync", invoiceSyncHandler(svc))
 ```
 
-The handler itself — this is the whole pattern. Imports you will need: `"net/http"`, `"github.com/gin-gonic/gin"`, `"github.com/golang-jwt/jwt/v5"`, and `"<your-module>/internal/btp"`.
+The handler itself — this is the whole pattern. Imports for this block: `"net/http"`, `"github.com/gin-gonic/gin"`, `"github.com/golang-jwt/jwt/v5"`, and `"<your-module>/internal/btp"`. The validation example in the next sub-section additionally needs `"time"`, `"encoding/json"`, and `"bytes"`.
 
 ```go
 func invoiceSyncHandler(svc *btp.Service) gin.HandlerFunc {
     return func(c *gin.Context) {
         // Optional — inspect the authenticated user. Claims are already
-        // signature- and audience-validated by the middleware.
+        // signature- and audience-validated by the middleware. The
+        // canonical XSUAA user claim is user_name; given_name,
+        // family_name, email, scope, and xs.system.attributes.xs.rolecollections
+        // are also available if the IdP released them.
         claims := c.MustGet("jwtClaims").(jwt.MapClaims)
-        _ = claims["email"] // use as you like
+        _ = claims["user_name"]
 
         // Call the on-prem SAP endpoint. svc.CallOnPremise runs the full
         // three-leg token dance, tunnels through the Cloud Connector, and
@@ -109,14 +112,16 @@ func invoiceSyncHandler(svc *btp.Service) gin.HandlerFunc {
 
         // Stream or parse resp.Body however you like. DataFromReader
         // copies the body to the client verbatim, preserving status
-        // code and content-type.
+        // code and content-type. resp.ContentLength can be -1 for
+        // chunked responses; DataFromReader handles that correctly by
+        // falling back to streaming without a Content-Length header.
         c.DataFromReader(resp.StatusCode, resp.ContentLength,
             resp.Header.Get("Content-Type"), resp.Body, nil)
     }
 }
 ```
 
-That's the whole wiring. For a pure pass-through (no pre/post-processing), the existing `/api/sap/:destination/*path` route already does exactly this — just compose the URL yourself on the caller side.
+That's the whole wiring. For a pure pass-through (no pre/post-processing), the existing `/api/sap/:destination/*path` route already does exactly this — just compose the URL yourself on the caller side. **For anything that writes state on the SAP side, read the next sub-section first — do not ship the raw-body version.**
 
 Unit-test the handler with the fixtures in `internal/btp/service_test.go`; they stand up stubs that respond like the real XSUAA / Destination / CC stack, so you can assert request shape and response translation without deploying.
 
