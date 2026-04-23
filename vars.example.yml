@@ -1,0 +1,4 @@
+# Copy to vars.yml and edit for your BTP subaccount, then:
+#   cf push -f manifest.yml --vars-file vars.yml
+backend-host: go-btp-mwe
+domain: cfapps.eu10.hana.ondemand.com

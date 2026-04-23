@@ -1,0 +1,18 @@
+{
+  "xsappname": "go-btp-mwe",
+  "tenant-mode": "dedicated",
+  "description": "Security config for the Go BTP Cloud Foundry MWE",
+  "scopes": [
+    { "name": "$XSAPPNAME.User", "description": "Regular authenticated user" }
+  ],
+  "role-templates": [
+    {
+      "name": "User",
+      "description": "Authenticated user of the Go BTP MWE",
+      "scope-references": [ "$XSAPPNAME.User" ]
+    }
+  ],
+  "oauth2-configuration": {
+    "redirect-uris": []
+  }
+}

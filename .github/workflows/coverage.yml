@@ -21,4 +21,8 @@ jobs:
         uses: VeryGoodOpenSource/very_good_coverage@v3.0.0
         with:
           path: "coverage.lcov"
-          min_coverage: 88 # the plan is to increase this with time
+          # The composition root (cmd/server/main.go — signal handling,
+          # ListenAndServe, os.Exit paths) cannot be meaningfully unit
+          # tested; exclude it so the 90 % gate reflects the library layer.
+          exclude: "**/cmd/**"
+          min_coverage: 90 # the plan is to increase this with time

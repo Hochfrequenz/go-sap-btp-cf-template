@@ -1,0 +1,16 @@
+{
+  "name": "go-btp-mwe-web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "SAP approuter in front of the Go BTP MWE backend",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node node_modules/@sap/approuter/approuter.js"
+  },
+  "dependencies": {
+    "@sap/approuter": "^21.0.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

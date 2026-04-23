@@ -1,0 +1,20 @@
+{
+  "welcomeFile": "/api/me",
+  "authenticationMethod": "route",
+  "sessionTimeout": 30,
+  "routes": [
+    {
+      "source": "^/api/(.*)$",
+      "target": "/api/$1",
+      "destination": "GoBackend",
+      "authenticationType": "xsuaa",
+      "csrfProtection": false
+    },
+    {
+      "source": "^/healthz$",
+      "target": "/healthz",
+      "destination": "GoBackend",
+      "authenticationType": "none"
+    }
+  ]
+}
