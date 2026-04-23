@@ -162,8 +162,13 @@ func Test_JWTValidator_RejectsHS256(t *testing.T) {
 	then.AssertThat(t, err, is.Not(is.Nil()))
 }
 
-func Test_JWTValidator_RequiresURL(t *testing.T) {
-	_, err := btp.NewJWTValidator(context.Background(), &btp.XSUAACredentials{XSAppName: "App"})
+func Test_JWTValidator_RequiresURLAndClientID(t *testing.T) {
+	// Missing URL.
+	_, err := btp.NewJWTValidator(context.Background(), &btp.XSUAACredentials{ClientID: "c"})
+	then.AssertThat(t, err, is.Not(is.Nil()))
+
+	// Missing ClientID.
+	_, err = btp.NewJWTValidator(context.Background(), &btp.XSUAACredentials{URL: "https://u"})
 	then.AssertThat(t, err, is.Not(is.Nil()))
 }
 

@@ -28,10 +28,12 @@ type JWTValidator struct {
 // The issuer claim is intentionally not checked. XSUAA emits an internal
 // "http://<zone>.localhost:8080/uaa/oauth/token" iss that cannot be
 // derived from VCAP_SERVICES without hardcoding a SAP implementation
-// detail. Because signature verification is already pinned to the
-// specific XSUAA instance's JWKS URL, the iss check would be redundant
-// for security — a token signed by the wrong tenant cannot pass
-// signature verification in the first place.
+// detail. Security is preserved by deriving the JWKS URL from this app's
+// own XSUAA binding (xsuaa.URL + "/token_keys"), so the keyset only ever
+// contains our tenant's signing keys; a token minted by a different
+// tenant fails signature verification. Callers must keep that
+// invariant — do not let the JWKS URL come from anywhere but the bound
+// XSUAACredentials, or the iss-drop argument no longer holds.
 func NewJWTValidator(ctx context.Context, xsuaa *XSUAACredentials) (*JWTValidator, error) {
 	if xsuaa == nil {
 		return nil, errors.New("xsuaa credentials required")
