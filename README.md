@@ -33,7 +33,7 @@ sequenceDiagram
 
     Go->>XSUAA: client_credentials<br/>(destination service creds)
     XSUAA-->>Go: destination token
-    Go->>Dest: GET /destination-configuration/v1/destinations/HfSap
+    Go->>Dest: GET /destination-configuration/v1/destinations/<destination>
     Dest-->>Go: {URL, Authentication, User, Password, CloudConnectorLocationId, …}
 
     Go->>XSUAA: client_credentials<br/>(connectivity service creds)
@@ -47,7 +47,7 @@ sequenceDiagram
     AR-->>Browser: response
 ```
 
-XSUAA client-credentials tokens are cached with a 30 s refresh leeway and collapsed via singleflight so a burst of concurrent requests does not hammer XSUAA. A 401/403 from the on-prem system invalidates the cached connectivity token and retries once (when the request body is replayable), so mid-flight token expiry self-heals instead of bubbling up.
+XSUAA client-credentials tokens are cached with a 30 s refresh leeway and collapsed via singleflight so a burst of concurrent requests does not hammer XSUAA. A `401` from the on-prem system on a GET-style (body-less) call invalidates the cached connectivity token and retries once, so mid-flight token expiry self-heals instead of bubbling up; a `403` is **not** retried (that means "authenticated but not authorized", which a fresh token cannot fix).
 
 ## Repository layout
 
@@ -226,9 +226,10 @@ Expected: `HTTP/1.1 200 OK` with body `ok`. `/healthz` is explicitly marked `aut
 
 #### 6b. `/api/me` — full OAuth + JWT-validation chain
 
-```sh
-# Open in a browser (cookie-based session); curl alone can't complete the SSO dance:
-open "https://<approuter-host>.<domain>/api/me"
+Open in a browser — `curl` alone cannot complete the XSUAA SSO dance. Use whatever your OS opens HTTPS URLs with (`open` on macOS, `start` on Windows cmd, `xdg-open` on Linux), or paste the URL:
+
+```
+https://<approuter-host>.<domain>/api/me
 ```
 
 Expected: a JSON body with a `claims` object — your `email`, `given_name`, `family_name`, `scope`, and `xs.system.attributes.xs.rolecollections`. This exercises the approuter's XSUAA auth-code flow, the Go backend's JWKS-pinned signature verification, and the `aud` / exp / leeway checks in `internal/btp/auth.go`.
@@ -237,10 +238,12 @@ A `401 invalid token: ... invalid audience` here points at section 7 of this dep
 
 #### 6c. `/api/sap/<destination-name>/sap/bc/adt/discovery` — full three-leg call to on-prem
 
+Simplest: open the URL in the same browser you used for 6b — the approuter session cookie is already set, and the browser will offer the XML body as a download. A 23 KB `*.xml` download is the success signal.
+
+If you want `curl` instead, export the approuter session cookie from your browser (DevTools → Application → Cookies → copy `JSESSIONID`, or use a "cookies.txt" browser extension) and pass it via `-b`:
+
 ```sh
-# Curl works if you have a valid approuter session cookie; otherwise use a browser
-# (and look at the download it offers — the XML body is the success signal).
-curl -L -b <session-cookies> \
+curl -L -b "JSESSIONID=<value-from-devtools>" \
   https://<approuter-host>.<domain>/api/sap/<destination-name>/sap/bc/adt/discovery
 ```
 
