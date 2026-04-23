@@ -317,6 +317,27 @@ func Test_Service_ProxyHandler_EndToEnd(t *testing.T) {
 	then.AssertThat(t, strings.Contains(w.Body.String(), `"ok":true`), is.True())
 }
 
+func Test_Service_CallOnPremise_PropagatesAuthenticatorError(t *testing.T) {
+	s := newBTPStack(t, fmt.Sprintf(`{
+		"destinationConfiguration":{"Name":"D","Type":"HTTP","URL":%q,
+			"Authentication":"BasicAuthentication","ProxyType":"OnPremise","User":""}
+	}`, "http://placeholder"))
+	s = newBTPStack(t, fmt.Sprintf(`{
+		"destinationConfiguration":{"Name":"D","Type":"HTTP","URL":%q,
+			"Authentication":"BasicAuthentication","ProxyType":"OnPremise","User":""}
+	}`, s.onPrem.URL))
+
+	svc, err := btp.NewService(s.env)
+	then.AssertThat(t, err, is.Nil())
+
+	// BasicAuthentication with empty User fails inside the authenticator
+	// registry — the error must surface from CallOnPremise, not be silently
+	// swallowed.
+	_, err = svc.CallOnPremise(context.Background(), "D", http.MethodGet, "/", nil, nil)
+	then.AssertThat(t, err, is.Not(is.Nil()))
+	then.AssertThat(t, strings.Contains(err.Error(), "apply destination auth"), is.True())
+}
+
 func Test_Service_CallOnPremise_RejectsPathTraversal(t *testing.T) {
 	s := newBTPStack(t, `{"destinationConfiguration":{"URL":"http://x"}}`)
 	svc, err := btp.NewService(s.env)

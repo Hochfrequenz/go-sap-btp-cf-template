@@ -89,6 +89,36 @@ func Test_TokenFetcher_RejectsMissingInputs(t *testing.T) {
 	then.AssertThat(t, err, is.Not(is.Nil()))
 }
 
+func Test_TokenFetcher_RejectsMalformedJSON(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`not json`))
+	}))
+	defer srv.Close()
+	f := btp.NewTokenFetcher(srv.Client())
+	_, err := f.Fetch(context.Background(), srv.URL, "c", "s")
+	then.AssertThat(t, err, is.Not(is.Nil()))
+}
+
+func Test_TokenFetcher_RejectsEmptyAccessToken(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"access_token":"","expires_in":3600}`))
+	}))
+	defer srv.Close()
+	f := btp.NewTokenFetcher(srv.Client())
+	_, err := f.Fetch(context.Background(), srv.URL, "c", "s")
+	then.AssertThat(t, err, is.Not(is.Nil()))
+}
+
+func Test_TokenFetcher_HandlesTransportError(t *testing.T) {
+	// Server closed before Fetch — triggers the httpClient.Do error path.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	srvURL := srv.URL
+	srv.Close()
+	f := btp.NewTokenFetcher(&http.Client{Timeout: 100 * time.Millisecond})
+	_, err := f.Fetch(context.Background(), srvURL, "c", "s")
+	then.AssertThat(t, err, is.Not(is.Nil()))
+}
+
 func Test_TokenFetcher_CollapsesConcurrentMisses(t *testing.T) {
 	// 50 goroutines race into a cold cache. Without singleflight each
 	// would trigger its own exchange; with it, exactly one does.
