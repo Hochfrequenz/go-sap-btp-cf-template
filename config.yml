@@ -1,0 +1,40 @@
+# Single source of truth for template-variable values across the repo.
+#
+# After forking this template, edit the values below, then run:
+#
+#   go run ./cmd/apply-config --dry-run   # preview changes
+#   go run ./cmd/apply-config             # apply to tree
+#   git diff                              # review
+#   git commit -am "chore: configure fork"
+#
+# `apply-config` rewrites: go.mod, every Go import path, manifest.yml
+# service bindings, xs-security.json xsappname, vars.example.yml,
+# web/package.json name field, and .github/workflows/deploy.yml env block.
+#
+# The README prose stays HF-flavoured on purpose; it documents the
+# running deploy, not the current state of the fork.
+
+app:
+  # CF backend app name. The approuter is auto-derived as <name>-web
+  # (see manifest.yml). Must follow CF app-name rules: lowercase
+  # alphanumeric with hyphens, no leading or trailing hyphen.
+  name: go-btp-mwe
+
+  # Go module path — exactly what ends up in go.mod and in every Go
+  # import. Host/org/repo style, e.g. github.com/yourorg/your-repo.
+  module: github.com/hochfrequenz/go-sap-btp-cloud-foundry-mwe
+
+# CF service instance names the backend binds to. Leave any field blank
+# to derive it as `<app.name>-xsuaa` / `-dest` / `-cc`.
+services:
+  xsuaa:        go-xsuaa
+  destination:  go-dest
+  connectivity: go-cc
+
+# CF landscape coordinates used by the release-triggered CD workflow
+# (.github/workflows/deploy.yml). Match your BTP subaccount.
+cf:
+  api:    https://api.cf.eu10.hana.ondemand.com
+  org:    HF Dev Account_hf-cf
+  space:  dev
+  domain: cfapps.eu10.hana.ondemand.com
