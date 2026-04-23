@@ -72,10 +72,22 @@ func LoadConfig(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-// applyDefaults fills blank service-instance names by appending the
-// conventional suffix to App.Name. Leaves the field alone if App.Name
-// is itself empty — Validate will flag that separately.
+// applyDefaults trims whitespace off every string field (so a value of
+// "   " reads as empty, same as missing), then fills blank service
+// instance names by appending the conventional suffix to App.Name.
+// Leaves the field alone if App.Name is itself empty — Validate will
+// flag that separately.
 func (c *Config) applyDefaults() {
+	c.App.Name = strings.TrimSpace(c.App.Name)
+	c.App.Module = strings.TrimSpace(c.App.Module)
+	c.Services.XSUAA = strings.TrimSpace(c.Services.XSUAA)
+	c.Services.Destination = strings.TrimSpace(c.Services.Destination)
+	c.Services.Connectivity = strings.TrimSpace(c.Services.Connectivity)
+	c.CF.API = strings.TrimSpace(c.CF.API)
+	c.CF.Org = strings.TrimSpace(c.CF.Org)
+	c.CF.Space = strings.TrimSpace(c.CF.Space)
+	c.CF.Domain = strings.TrimSpace(c.CF.Domain)
+
 	if c.App.Name == "" {
 		return
 	}

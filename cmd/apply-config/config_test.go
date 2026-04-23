@@ -127,3 +127,20 @@ func Test_LoadConfig_MissingFile(t *testing.T) {
 	then.AssertThat(t, err, is.Not(is.Nil()))
 	then.AssertThat(t, strings.Contains(err.Error(), "read"), is.True())
 }
+
+func Test_LoadConfig_TrimsWhitespaceOnAllFields(t *testing.T) {
+	// Whitespace-only values should read as empty — otherwise the
+	// blank-check would skip validation and let "   " slip through.
+	// Surrounded-with-whitespace valid values should pass trimming
+	// and validate on their trimmed content.
+	path := writeTemp(t, "app:\n  name: \"   \"\n  module: \"  github.com/acme/x  \"\nservices:\n  xsuaa: valid-xsuaa\n  destination: valid-dest\n  connectivity: valid-cc\ncf:\n  api: \"  https://api.cf.eu10.hana.ondemand.com  \"\n  org: \"   \"\n  space: dev\n  domain: cfapps.eu10.hana.ondemand.com\n")
+	_, err := LoadConfig(path)
+	then.AssertThat(t, err, is.Not(is.Nil()))
+	msg := err.Error()
+	// Whitespace-only values should each be flagged as required.
+	then.AssertThat(t, strings.Contains(msg, "app.name is required"), is.True())
+	then.AssertThat(t, strings.Contains(msg, "cf.org is required"), is.True())
+	// Trimmed-and-valid values should NOT be flagged.
+	then.AssertThat(t, strings.Contains(msg, "app.module"), is.False())
+	then.AssertThat(t, strings.Contains(msg, "cf.api"), is.False())
+}

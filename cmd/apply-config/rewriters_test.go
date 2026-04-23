@@ -237,10 +237,31 @@ func Test_transformDeployYml_FailsWhenExpectedKeyMissing(t *testing.T) {
 	then.AssertThat(t, strings.Contains(err.Error(), "CF_ORG"), is.True())
 }
 
-func Test_walkGoImports_RewritesAnchoredPrefix(t *testing.T) {
+// planResultFor extracts the (Before, After) pair for a given relative
+// path from a planGoImports plan slice. Helper to keep the tests tidy.
+func planResultFor(t *testing.T, plan []pending, relPath string) (string, string) {
+	t.Helper()
+	for _, p := range plan {
+		if filepath.ToSlash(p.result.Path) == relPath {
+			return string(p.result.Before), string(p.result.After)
+		}
+	}
+	t.Fatalf("plan does not include %q; paths: %v", relPath, planPaths(plan))
+	return "", ""
+}
+
+func planPaths(plan []pending) []string {
+	var out []string
+	for _, p := range plan {
+		out = append(out, filepath.ToSlash(p.result.Path))
+	}
+	return out
+}
+
+func Test_planGoImports_RewritesAnchoredPrefix(t *testing.T) {
 	// Build a throwaway tree:
 	//   root/go.mod                  (module github.com/hochfrequenz/mwe)
-	//   root/cmd/server/main.go      (imports the module)
+	//   root/cmd/server/main.go      (imports the module, plus a subpackage)
 	//   root/pkg/unaffected.go       (imports a similarly-named OTHER module)
 	dir := t.TempDir()
 	then.AssertThat(t, os.WriteFile(filepath.Join(dir, "go.mod"),
@@ -264,40 +285,99 @@ import "github.com/hochfrequenz/mwe-extra/lib"
 
 	cfg := testConfig()
 	cfg.App.Module = "github.com/acme/cool-service"
-	results, err := walkGoImports(dir, "github.com/hochfrequenz/mwe", cfg, false /* dryRun */)
+	plan, err := planGoImports(dir, "github.com/hochfrequenz/mwe", cfg)
 	then.AssertThat(t, err, is.Nil())
 
-	// Verify main.go got rewritten
-	got, _ := os.ReadFile(filepath.Join(dir, "cmd", "server", "main.go"))
-	then.AssertThat(t, strings.Contains(string(got), `"github.com/acme/cool-service/internal/btp"`), is.True())
-	then.AssertThat(t, strings.Contains(string(got), `"github.com/acme/cool-service"`), is.True())
-	// Verify prefix-collision file untouched
-	untouched, _ := os.ReadFile(filepath.Join(dir, "pkg", "unaffected.go"))
-	then.AssertThat(t, strings.Contains(string(untouched), "mwe-extra/lib"), is.True())
+	// main.go gets rewritten in the plan, both the root import and the
+	// subpackage import.
+	_, mainAfter := planResultFor(t, plan, "cmd/server/main.go")
+	then.AssertThat(t, strings.Contains(mainAfter, `"github.com/acme/cool-service/internal/btp"`), is.True())
+	then.AssertThat(t, strings.Contains(mainAfter, `"github.com/acme/cool-service"`), is.True())
+	// Prefix-collision file stays untouched in the plan.
+	unBefore, unAfter := planResultFor(t, plan, "pkg/unaffected.go")
+	then.AssertThat(t, unBefore, is.EqualTo(unAfter))
+	then.AssertThat(t, strings.Contains(unAfter, "mwe-extra/lib"), is.True())
 
-	// And the result set covers at least both files
-	paths := map[string]bool{}
-	for _, r := range results {
-		paths[r.Path] = true
-	}
-	then.AssertThat(t, paths[filepath.Join("cmd", "server", "main.go")] || paths["cmd/server/main.go"], is.True())
+	// planGoImports is a PLAN, not a write. The on-disk file must still
+	// match the original — no writes happen until Run's Phase 2.
+	ondisk, _ := os.ReadFile(filepath.Join(dir, "cmd", "server", "main.go"))
+	then.AssertThat(t, strings.Contains(string(ondisk), "github.com/hochfrequenz/mwe"), is.True())
+	then.AssertThat(t, strings.Contains(string(ondisk), "github.com/acme"), is.False())
 }
 
-func Test_walkGoImports_DryRunDoesNotWrite(t *testing.T) {
+func Test_planGoImports_BlankAndAliasedImports(t *testing.T) {
+	// A fork may use blank imports (`_ "module"`) or aliased imports
+	// (`alias "module"`). The anchor `"<module>"` or `"<module>/`
+	// should still hit them; this test locks that in.
 	dir := t.TempDir()
 	then.AssertThat(t, os.WriteFile(filepath.Join(dir, "go.mod"),
 		[]byte("module github.com/hochfrequenz/mwe\n"), 0644), is.Nil())
-	then.AssertThat(t, os.WriteFile(filepath.Join(dir, "a.go"),
-		[]byte(`package a
-import "github.com/hochfrequenz/mwe/sub"
+	then.AssertThat(t, os.WriteFile(filepath.Join(dir, "file.go"),
+		[]byte(`package p
+
+import (
+	_     "github.com/hochfrequenz/mwe/side/effect"
+	btp   "github.com/hochfrequenz/mwe/internal/btp"
+	. "github.com/hochfrequenz/mwe/dotted"
+)
 `), 0644), is.Nil())
 
 	cfg := testConfig()
 	cfg.App.Module = "github.com/acme/x"
-	_, err := walkGoImports(dir, "github.com/hochfrequenz/mwe", cfg, true /* dryRun */)
+	plan, err := planGoImports(dir, "github.com/hochfrequenz/mwe", cfg)
 	then.AssertThat(t, err, is.Nil())
 
-	got, _ := os.ReadFile(filepath.Join(dir, "a.go"))
-	then.AssertThat(t, strings.Contains(string(got), "github.com/hochfrequenz/mwe/sub"), is.True())
-	then.AssertThat(t, strings.Contains(string(got), "github.com/acme"), is.False())
+	_, after := planResultFor(t, plan, "file.go")
+	for _, want := range []string{
+		`_     "github.com/acme/x/side/effect"`,
+		`btp   "github.com/acme/x/internal/btp"`,
+		`. "github.com/acme/x/dotted"`,
+	} {
+		if !strings.Contains(after, want) {
+			t.Errorf("expected %q in rewritten file; got:\n%s", want, after)
+		}
+	}
+}
+
+func Test_Run_IsAtomicWhenATransformFails(t *testing.T) {
+	// Phase-2 write must not run if any Phase-1 Transform errors. Set
+	// up a tree where go.mod is fine but manifest.yml is intentionally
+	// broken (no matching services: block); transformManifestYml will
+	// fail, and we verify go.mod on disk is unchanged afterwards.
+	dir := t.TempDir()
+	writeFile := func(rel, content string) {
+		full := filepath.Join(dir, rel)
+		then.AssertThat(t, os.MkdirAll(filepath.Dir(full), 0755), is.Nil())
+		then.AssertThat(t, os.WriteFile(full, []byte(content), 0644), is.Nil())
+	}
+	writeFile("go.mod", "module github.com/hochfrequenz/mwe\n")
+	writeFile("manifest.yml", "applications:\n  - name: foo\n    # no services block — transform will fail\n")
+	// Other files present so reads don't fail before manifest's Transform runs.
+	writeFile("xs-security.json", `{"xsappname":"mwe"}`)
+	writeFile("vars.example.yml", "backend-host: mwe\ndomain: cfapps.eu10.hana.ondemand.com\n")
+	writeFile("web/package.json", `{"name":"mwe-web"}`)
+	writeFile(".github/workflows/deploy.yml", "env:\n  CF_API: x\n  CF_ORG: x\n  CF_SPACE: x\n  BACKEND_HOST: x\n  DOMAIN: x\n")
+
+	cfg := testConfig()
+	_, err := Run(dir, cfg, false /* dryRun */)
+	then.AssertThat(t, err, is.Not(is.Nil())) // transformManifestYml should fail
+
+	// go.mod on disk must still be the pre-run content — the atomicity
+	// guarantee. If this fails, the tree is half-applied.
+	gomod, _ := os.ReadFile(filepath.Join(dir, "go.mod"))
+	then.AssertThat(t, string(gomod), is.EqualTo("module github.com/hochfrequenz/mwe\n"))
+}
+
+func Test_transformVarsExampleYml_PreservesCRLFLineEndings(t *testing.T) {
+	in := []byte("backend-host: go-btp-mwe\r\ndomain: cfapps.eu10.hana.ondemand.com\r\n")
+	out, err := transformVarsExampleYml(in, testConfig())
+	then.AssertThat(t, err, is.Nil())
+	for _, want := range []string{
+		"backend-host: acme-app\r\n",
+		"domain: cfapps.us10.hana.ondemand.com\r\n",
+	} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("missing exact byte sequence %q; got:\n%q", want, string(out))
+		}
+	}
 }

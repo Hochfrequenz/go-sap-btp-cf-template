@@ -23,9 +23,12 @@ type Rewriter struct {
 	Transform func(old []byte, cfg *Config) ([]byte, error)
 }
 
-// Result accumulates per-rewriter outcomes for reporting.
+// Result accumulates per-rewriter outcomes for reporting. DryRun is
+// surfaced so Report can lead with an unambiguous banner — an operator
+// must never mistake a preview run for an applied one.
 type Result struct {
 	Rewriters []RewriterResult
+	DryRun    bool
 }
 
 // RewriterResult holds the before and after bytes for one rewriter's
@@ -33,6 +36,14 @@ type Result struct {
 type RewriterResult struct {
 	Name, Path    string
 	Before, After []byte
+}
+
+// pending is a file's plan entry: an absolute path plus the computed
+// result. Used internally by Run to separate the Transform phase
+// (may fail) from the write phase (commits to disk).
+type pending struct {
+	absPath string
+	result  RewriterResult
 }
 
 // HasChanges returns true if any rewriter produced a non-empty diff.
@@ -51,6 +62,9 @@ func (r *Result) HasChanges() bool {
 // happening without opening every file.
 func (r *Result) Report() string {
 	var b strings.Builder
+	if r.DryRun {
+		fmt.Fprintln(&b, "-- dry run, no files written --")
+	}
 	changed := 0
 	for _, rr := range r.Rewriters {
 		if bytes.Equal(rr.Before, rr.After) {
@@ -67,9 +81,10 @@ func (r *Result) Report() string {
 	return b.String()
 }
 
-// Run drives all rewriters. If dryRun, no files are written — but
-// every Transform still runs (so config-vs-tree drift is fully
-// detected, not just the first mismatch).
+// Run drives all rewriters in two phases — plan everything in memory
+// first, only write if every Transform succeeded. A failure in any
+// rewriter thus leaves the tree untouched instead of half-applied.
+// If dryRun, the write phase is skipped entirely.
 func Run(root string, cfg *Config, dryRun bool) (*Result, error) {
 	// The Go-imports rewriter needs to know the *current* module path
 	// so it can translate "oldModule/..." → "newModule/..." anchored
@@ -79,43 +94,51 @@ func Run(root string, cfg *Config, dryRun bool) (*Result, error) {
 		return nil, fmt.Errorf("discover current go module path: %w", err)
 	}
 
-	res := &Result{}
+	res := &Result{DryRun: dryRun}
+
+	// --- Phase 1: plan. Every Transform runs; no writes. ---
+	var plan []pending
+
 	for _, rw := range singleFileRewriters() {
-		rr, err := applyRewriter(root, rw, cfg, dryRun)
+		absPath := filepath.Join(root, rw.Path)
+		old, err := os.ReadFile(absPath)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%s: read %s: %w", rw.Name, absPath, err)
 		}
+		newContent, err := rw.Transform(old, cfg)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", rw.Name, err)
+		}
+		rr := RewriterResult{Name: rw.Name, Path: rw.Path, Before: old, After: newContent}
+		plan = append(plan, pending{absPath: absPath, result: rr})
 		res.Rewriters = append(res.Rewriters, rr)
 	}
 
 	// Walk the tree for *.go files — this isn't a single path, it's
 	// a glob, so it lives outside singleFileRewriters().
-	goResults, err := walkGoImports(root, oldModule, cfg, dryRun)
+	goPlan, err := planGoImports(root, oldModule, cfg)
 	if err != nil {
 		return nil, err
 	}
-	res.Rewriters = append(res.Rewriters, goResults...)
-
-	return res, nil
-}
-
-func applyRewriter(root string, rw Rewriter, cfg *Config, dryRun bool) (RewriterResult, error) {
-	path := filepath.Join(root, rw.Path)
-	old, err := os.ReadFile(path)
-	if err != nil {
-		return RewriterResult{}, fmt.Errorf("%s: read %s: %w", rw.Name, path, err)
+	for _, p := range goPlan {
+		plan = append(plan, p)
+		res.Rewriters = append(res.Rewriters, p.result)
 	}
-	newContent, err := rw.Transform(old, cfg)
-	if err != nil {
-		return RewriterResult{}, fmt.Errorf("%s: %w", rw.Name, err)
+
+	// --- Phase 2: write. Only reached if every Transform in Phase 1
+	// succeeded, so a half-applied tree is impossible. ---
+	if dryRun {
+		return res, nil
 	}
-	result := RewriterResult{Name: rw.Name, Path: rw.Path, Before: old, After: newContent}
-	if !dryRun && !bytes.Equal(old, newContent) {
-		if err := os.WriteFile(path, newContent, 0644); err != nil {
-			return RewriterResult{}, fmt.Errorf("%s: write %s: %w", rw.Name, path, err)
+	for _, p := range plan {
+		if bytes.Equal(p.result.Before, p.result.After) {
+			continue
+		}
+		if err := os.WriteFile(p.absPath, p.result.After, 0644); err != nil {
+			return nil, fmt.Errorf("%s: write %s: %w", p.result.Name, p.absPath, err)
 		}
 	}
-	return result, nil
+	return res, nil
 }
 
 // singleFileRewriters returns the fixed, ordered list of per-file
@@ -280,7 +303,7 @@ func transformDeployYml(old []byte, cfg *Config) ([]byte, error) {
 		// terminator without consuming it.
 		re := regexp.MustCompile(`(?m)^(\s+` + regexp.QuoteMeta(s.key) + `):\s[^\r\n]*`)
 		if !re.Match(result) {
-			return nil, fmt.Errorf("deploy.yml: no `%s:` env line found", s.key)
+			return nil, fmt.Errorf("deploy.yml: no `%s:` line found (expected in the workflow's top-level `env:` block)", s.key)
 		}
 		result = re.ReplaceAll(result, []byte("${1}: "+s.newValue))
 	}
@@ -289,19 +312,17 @@ func transformDeployYml(old []byte, cfg *Config) ([]byte, error) {
 
 // --- Go imports walker --------------------------------------------------
 
-// walkGoImports finds every *.go file under root and replaces the
-// quoted module prefix `"<oldModule>` followed by `"` or `/`. Anchoring
-// on the trailing `"` or `/` avoids false matches against longer module
-// names that share a prefix (e.g. -extra, -v2).
-func walkGoImports(root, oldModule string, cfg *Config, dryRun bool) ([]RewriterResult, error) {
-	if oldModule == cfg.App.Module {
-		// No rewrites will happen, but we still walk and report no-ops
-		// so the summary covers every .go file.
-	}
+// planGoImports finds every *.go file under root, applies the quoted
+// module-prefix replacement anchored on `"<oldModule>"` or `"<oldModule>/`
+// (so sibling prefixes like `<oldModule>-extra` are not matched), and
+// returns a plan of per-file rewrites. No files are written — callers
+// (Run) decide whether to commit the plan, so a failure elsewhere cannot
+// leave the tree half-applied.
+func planGoImports(root, oldModule string, cfg *Config) ([]pending, error) {
 	re := regexp.MustCompile(`"` + regexp.QuoteMeta(oldModule) + `([/"])`)
 	replacement := []byte(`"` + cfg.App.Module + `$1`)
 
-	var out []RewriterResult
+	var out []pending
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -322,17 +343,15 @@ func walkGoImports(root, oldModule string, cfg *Config, dryRun bool) ([]Rewriter
 		}
 		newContent := re.ReplaceAll(old, replacement)
 		rel, _ := filepath.Rel(root, p)
-		out = append(out, RewriterResult{
-			Name:   "go imports",
-			Path:   rel,
-			Before: old,
-			After:  newContent,
+		out = append(out, pending{
+			absPath: p,
+			result: RewriterResult{
+				Name:   "go imports",
+				Path:   rel,
+				Before: old,
+				After:  newContent,
+			},
 		})
-		if !dryRun && !bytes.Equal(old, newContent) {
-			if err := os.WriteFile(p, newContent, 0644); err != nil {
-				return fmt.Errorf("go imports: write %s: %w", p, err)
-			}
-		}
 		return nil
 	})
 	return out, err
