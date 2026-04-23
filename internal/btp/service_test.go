@@ -79,7 +79,7 @@ func newBTPStack(t *testing.T, destBody string) *btpStack {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		for k, vs := range resp.Header {
 			for _, v := range vs {
 				w.Header().Add(k, v)
@@ -180,7 +180,7 @@ func Test_Service_CallOnPremise_NoLocationIDHeaderWhenAbsent(t *testing.T) {
 
 	resp, err := svc.CallOnPremise(context.Background(), "D", http.MethodGet, "/x", nil, nil)
 	then.AssertThat(t, err, is.Nil())
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	then.AssertThat(t, resp.Header.Get("X-Received-Location"), is.EqualTo(""))
 }
 
@@ -270,7 +270,7 @@ func Test_Service_CallOnPremise_RetriesOn401(t *testing.T) {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		w.WriteHeader(resp.StatusCode)
 		_, _ = io.Copy(w, resp.Body)
 	}))
@@ -293,7 +293,7 @@ func Test_Service_CallOnPremise_RetriesOn401(t *testing.T) {
 
 	resp, err := svc.CallOnPremise(context.Background(), "D", http.MethodGet, "/", nil, nil)
 	then.AssertThat(t, err, is.Nil())
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	then.AssertThat(t, resp.StatusCode, is.EqualTo(http.StatusOK))
 	then.AssertThat(t, int(calls.Load()), is.EqualTo(2))
 }

@@ -21,7 +21,7 @@ func Test_TokenFetcher_CachesWithinTTL(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"access_token":"tok-%d","token_type":"bearer","expires_in":3600}`, calls.Load())
+		_, _ = fmt.Fprintf(w, `{"access_token":"tok-%d","token_type":"bearer","expires_in":3600}`, calls.Load())
 	}))
 	defer srv.Close()
 
@@ -41,7 +41,7 @@ func Test_TokenFetcher_RefetchesAfterInvalidate(t *testing.T) {
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n := calls.Add(1)
-		fmt.Fprintf(w, `{"access_token":"tok-%d","token_type":"bearer","expires_in":3600}`, n)
+		_, _ = fmt.Fprintf(w, `{"access_token":"tok-%d","token_type":"bearer","expires_in":3600}`, n)
 	}))
 	defer srv.Close()
 
@@ -60,7 +60,7 @@ func Test_TokenFetcher_RefetchesNearExpiry(t *testing.T) {
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n := calls.Add(1)
-		fmt.Fprintf(w, `{"access_token":"tok-%d","token_type":"bearer","expires_in":1}`, n)
+		_, _ = fmt.Fprintf(w, `{"access_token":"tok-%d","token_type":"bearer","expires_in":1}`, n)
 	}))
 	defer srv.Close()
 
@@ -127,7 +127,7 @@ func Test_TokenFetcher_CollapsesConcurrentMisses(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		<-release
 		n := calls.Add(1)
-		fmt.Fprintf(w, `{"access_token":"tok-%d","token_type":"bearer","expires_in":3600}`, n)
+		_, _ = fmt.Fprintf(w, `{"access_token":"tok-%d","token_type":"bearer","expires_in":3600}`, n)
 	}))
 	defer srv.Close()
 

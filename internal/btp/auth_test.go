@@ -69,7 +69,7 @@ func newValidator(t *testing.T, f *jwksFixture, audience string) (*btp.JWTValida
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.Copy(w, resp.Body)
 	})
