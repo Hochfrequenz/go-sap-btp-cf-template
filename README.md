@@ -94,9 +94,41 @@ cf create-service connectivity lite   go-cc
 
 `cf push` (step 4 below) binds them to the app automatically via `manifest.yml`'s `services:` section.
 
-#### 3. (First deploy only) Find out which Go buildpack your landscape uses
+#### 3. (First deploy only) Confirm which Go buildpack your landscape ships
 
-This repo targets the classic `cloudfoundry/go-buildpack`. Paketo's Go buildpack needs different env vars. Run `cf buildpacks` on your target landscape to check — [issue #2](https://github.com/Hochfrequenz/go-sap-btp-cloud-foundry-mwe/issues/2) has the exact comparison and the Paketo edit if needed.
+This repo targets the classic `cloudfoundry/go-buildpack`, with `GO_INSTALL_PACKAGE_SPEC: ./cmd/server` set in `manifest.yml` so the buildpack knows where `main` lives (it does not auto-discover subpackages the way Paketo does). If `cf buildpacks` on your landscape shows `paketo-buildpacks/go` instead, replace the `buildpacks:` block with:
+
+```yaml
+buildpacks:
+  - paketo-buildpacks/go
+env:
+  GIN_MODE: release
+  BP_GO_TARGETS: ./cmd/server
+```
+
+Confirmed working on eu10 (AWS Frankfurt) with `go_buildpack` cflinuxfs4 v1.10.44 — [see the walkthrough](docs/btp-deploy-walkthrough.de.md) (DE) for the full replay.
+
+### Pre-flight gotchas (`eu10`, April 2026)
+
+Things that bit the first real deploy and are worth a 10-second check before `cf push`:
+
+1. **Org-level route quota, not space-level.** `cf routes` only shows the current space, but the route quota applies org-wide. Check:
+
+   ```sh
+   cf curl "/v3/routes?per_page=100&organization_guids=$(cf org "$ORG" --guid)" \
+     | jq .pagination.total_results
+   cf curl "/v3/organization_quotas/$(cf org "$ORG" --guid \
+     | xargs -I{} cf curl /v3/organizations/{} \
+     | jq -r .relationships.quota.data.guid)" | jq .routes
+   ```
+
+   The push needs **two** free route slots (backend + approuter). If you're within 2 of the quota, free some slots (`cf delete <stopped-app> -r`) or ask a global-account admin to raise the quota. Symptom when ignored: `Routes quota exceeded for organization '…'`, before staging starts.
+
+2. **Buildpack Go version is not current.** SAP's `go_buildpack` lags upstream. On eu10 today it ships Go 1.23.12 (EOL since Go 1.26 released), even though `go.mod` says `go 1.26`. The build works as long as the stager can fetch a newer toolchain via Go's auto-toolchain feature — if it can't, the build fails with `go.mod requires go >= 1.26`. Don't start using post-1.23 language/stdlib features without testing against the landscape first.
+
+3. **Sections 5b + 5c below need subaccount admin rights.** If your BTP user is a plain Space Developer (typical non-admin), creating a Role Collection and a Destination are blocked by the cockpit. Check with whoever admins `HF CloudFoundry` before you start; otherwise you'll `cf push` successfully and then stall on permissions.
+
+4. **Cockpit URLs have moved.** The historical `https://cockpit.<region>.hana.ondemand.com/` pattern now redirects; the current EMEA entry is `https://emea.cockpit.btp.cloud.sap/cockpit`. The stable way to land in the right place is `https://account.hana.ondemand.com/`, which redirects to your regional cockpit automatically.
 
 ### 4. cf push
 
