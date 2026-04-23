@@ -22,14 +22,24 @@ type JWTValidator struct {
 }
 
 // NewJWTValidator fetches the JWKS at xsuaa.JWKSURL() and returns a ready
-// validator. It verifies: RS256 signature, issuer = xsuaa.URL,
-// audience = xsuaa.XSAppName, standard exp/nbf/iat with TokenRefreshLeeway.
+// validator. It verifies: RS256 signature (keys pinned to xsuaa.JWKSURL()),
+// audience = xsuaa.ClientID, standard exp/nbf/iat with TokenRefreshLeeway.
+//
+// The issuer claim is intentionally not checked. XSUAA emits an internal
+// "http://<zone>.localhost:8080/uaa/oauth/token" iss that cannot be
+// derived from VCAP_SERVICES without hardcoding a SAP implementation
+// detail. Security is preserved by deriving the JWKS URL from this app's
+// own XSUAA binding (xsuaa.URL + "/token_keys"), so the keyset only ever
+// contains our tenant's signing keys; a token minted by a different
+// tenant fails signature verification. Callers must keep that
+// invariant — do not let the JWKS URL come from anywhere but the bound
+// XSUAACredentials, or the iss-drop argument no longer holds.
 func NewJWTValidator(ctx context.Context, xsuaa *XSUAACredentials) (*JWTValidator, error) {
 	if xsuaa == nil {
 		return nil, errors.New("xsuaa credentials required")
 	}
-	if xsuaa.URL == "" || xsuaa.XSAppName == "" {
-		return nil, errors.New("xsuaa credentials missing url or xsappname")
+	if xsuaa.URL == "" || xsuaa.ClientID == "" {
+		return nil, errors.New("xsuaa credentials missing url or clientid")
 	}
 
 	kf, err := keyfunc.NewDefaultCtx(ctx, []string{xsuaa.JWKSURL()})
@@ -42,8 +52,10 @@ func NewJWTValidator(ctx context.Context, xsuaa *XSUAACredentials) (*JWTValidato
 		// explicitly blocks the "alg: none" and "HS256 with the public key
 		// as secret" classic confusion attacks.
 		jwt.WithValidMethods([]string{"RS256"}),
-		jwt.WithIssuer(trimSlash(xsuaa.URL)),
-		jwt.WithAudience(xsuaa.XSAppName),
+		// Real XSUAA tokens carry aud entries like "sb-<xsappname>!t<tenant>"
+		// (the clientid form), not the bare xsappname. Comparing against
+		// ClientID matches what XSUAA actually emits.
+		jwt.WithAudience(xsuaa.ClientID),
 		jwt.WithExpirationRequired(),
 		jwt.WithLeeway(TokenRefreshLeeway),
 	)
