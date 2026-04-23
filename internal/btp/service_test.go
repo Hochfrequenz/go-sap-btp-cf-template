@@ -101,7 +101,7 @@ func newBTPStack(t *testing.T, destBody string) *btpStack {
 	// XSUAA token endpoint — returns a one-hour token per call.
 	s.xsuaa = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n := s.tokens.Add(1)
-		fmt.Fprintf(w, `{"access_token":"tok-%d","token_type":"bearer","expires_in":3600}`, n)
+		_, _ = fmt.Fprintf(w, `{"access_token":"tok-%d","token_type":"bearer","expires_in":3600}`, n)
 	}))
 	t.Cleanup(s.xsuaa.Close)
 
@@ -283,7 +283,7 @@ func Test_Service_CallOnPremise_RetriesOn401(t *testing.T) {
 	s.dest.Close()
 	s.dest = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"destinationConfiguration":{"Name":"D","Type":"HTTP","URL":%q,"Authentication":"NoAuthentication","ProxyType":"OnPremise"}}`, flipServer.URL)
+		_, _ = fmt.Fprintf(w, `{"destinationConfiguration":{"Name":"D","Type":"HTTP","URL":%q,"Authentication":"NoAuthentication","ProxyType":"OnPremise"}}`, flipServer.URL)
 	}))
 	t.Cleanup(s.dest.Close)
 	s.env.Dest.URI = s.dest.URL

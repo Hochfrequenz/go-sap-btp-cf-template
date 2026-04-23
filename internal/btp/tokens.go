@@ -126,7 +126,7 @@ func (f *TokenFetcher) exchange(ctx context.Context, tokenBaseURL, clientID, cli
 	if err != nil {
 		return "", 0, fmt.Errorf("token request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxMgmtResponseBytes))
 	if err != nil {

@@ -188,7 +188,7 @@ func (s *Service) ProxyHandler(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	for k, vs := range resp.Header {
 		if skipForwardedHeader(k) {

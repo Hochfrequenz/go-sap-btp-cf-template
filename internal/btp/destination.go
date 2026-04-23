@@ -103,7 +103,7 @@ func LookupDestination(ctx context.Context, httpClient *http.Client, cred *DestC
 	if err != nil {
 		return nil, fmt.Errorf("destination lookup: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Cap the body read: the Destination service is trusted but a misrouted
 	// response (proxy, DNS, etc.) could otherwise balloon memory.

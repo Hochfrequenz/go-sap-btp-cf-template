@@ -17,13 +17,6 @@ import (
 
 const vcapAppJSON = `{"application_id":"id","application_name":"go-btp-mwe","space_name":"dev","uris":["x"]}`
 
-func vcapXSUAA(url, clientID, clientSecret, xsappname, uaadomain string) string {
-	return fmt.Sprintf(`{
-		"xsuaa":[{"label":"xsuaa","name":"go-xsuaa","credentials":{
-			"url":%q,"clientid":%q,"clientsecret":%q,"xsappname":%q,"uaadomain":%q,"identityzone":"hf"}}]
-	}`, url, clientID, clientSecret, xsappname, uaadomain)
-}
-
 func Test_LoadEnv_FailsWithoutVCAP(t *testing.T) {
 	t.Setenv("VCAP_APPLICATION", "")
 	t.Setenv("VCAP_SERVICES", "")
