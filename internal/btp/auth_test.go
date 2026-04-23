@@ -58,9 +58,9 @@ func (f *jwksFixture) mint(t *testing.T, claims jwt.MapClaims) string {
 }
 
 // newValidator stands up a server that serves JWKS at /token_keys using the
-// fixture's key, and returns a validator pointed at it. issuerURL (the
-// wrapper's URL) is the value tokens must use in their "iss" claim.
-func newValidator(t *testing.T, f *jwksFixture, audience string) (*btp.JWTValidator, string) {
+// fixture's key, and returns a validator pointed at it. clientID is the
+// value tokens must carry in their "aud" claim to be accepted.
+func newValidator(t *testing.T, f *jwksFixture, clientID string) (*btp.JWTValidator, string) {
 	t.Helper()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/token_keys", func(w http.ResponseWriter, r *http.Request) {
@@ -76,7 +76,7 @@ func newValidator(t *testing.T, f *jwksFixture, audience string) (*btp.JWTValida
 	wrapper := httptest.NewServer(mux)
 	t.Cleanup(wrapper.Close)
 
-	v, err := btp.NewJWTValidator(context.Background(), &btp.XSUAACredentials{URL: wrapper.URL, XSAppName: audience})
+	v, err := btp.NewJWTValidator(context.Background(), &btp.XSUAACredentials{URL: wrapper.URL, ClientID: clientID})
 	then.AssertThat(t, err, is.Nil())
 	return v, wrapper.URL
 }
@@ -109,15 +109,27 @@ func Test_JWTValidator_RejectsWrongAudience(t *testing.T) {
 	then.AssertThat(t, err, is.Not(is.Nil()))
 }
 
-func Test_JWTValidator_RejectsWrongIssuer(t *testing.T) {
+// With the iss check dropped (see NewJWTValidator doc), the actual security
+// boundary on "was this token minted by our XSUAA tenant?" is signature
+// verification against the JWKS URL pinned at construction time. This test
+// mints a token signed with a different key (and a kid the JWKS does not
+// advertise) to confirm the validator rejects it.
+func Test_JWTValidator_RejectsTokenSignedByUnknownKey(t *testing.T) {
 	f := newJWKSFixture(t)
 	v, _ := newValidator(t, f, "GoApp")
-	raw := f.mint(t, jwt.MapClaims{
-		"iss": "https://attacker.example",
+
+	other, err := rsa.GenerateKey(rand.Reader, 2048)
+	then.AssertThat(t, err, is.Nil())
+
+	tok := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{
 		"aud": "GoApp",
 		"exp": time.Now().Add(time.Hour).Unix(),
 	})
-	_, err := v.Parse(raw)
+	tok.Header["kid"] = "key-not-in-jwks"
+	raw, err := tok.SignedString(other)
+	then.AssertThat(t, err, is.Nil())
+
+	_, err = v.Parse(raw)
 	then.AssertThat(t, err, is.Not(is.Nil()))
 }
 

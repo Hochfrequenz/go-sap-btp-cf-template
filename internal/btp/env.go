@@ -71,7 +71,7 @@ func (x *XSUAACredentials) Validate(errs *[]string) {
 		*errs = append(*errs, "xsuaa: clientsecret is required")
 	}
 	if x.XSAppName == "" {
-		*errs = append(*errs, "xsuaa: xsappname is required (used as JWT audience)")
+		*errs = append(*errs, "xsuaa: xsappname is required")
 	}
 	if x.UAADomain == "" {
 		*errs = append(*errs, "xsuaa: uaadomain is required")
