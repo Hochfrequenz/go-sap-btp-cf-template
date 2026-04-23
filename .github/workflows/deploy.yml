@@ -1,0 +1,130 @@
+name: Deploy to BTP on release
+
+# Fires when a GitHub Release is published. Draft releases, or plain tag
+# pushes, do NOT trigger this workflow — only the explicit "Publish"
+# action on a Release. That gives a human a deliberate gate before any
+# production push.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+env:
+  CF_API: https://api.cf.eu10.hana.ondemand.com
+  CF_ORG: HF Dev Account_hf-cf
+  CF_SPACE: dev
+  BACKEND_HOST: go-btp-mwe
+  DOMAIN: cfapps.eu10.hana.ondemand.com
+
+jobs:
+  # Gate — tests, vet, lint, fmt all must pass green. The deploy job only
+  # runs if this one succeeds. Intentionally duplicated with test.yml /
+  # golangci-lint.yml so a release cannot slip through when `main` was
+  # green at merge time but the release commit later drifted.
+  gate:
+    name: gate (test + vet + lint + fmt)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: 1.26.x
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test -race
+        run: go test ./... -race
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.11.4
+          args: --enable dupl,goconst,goconst,gocyclo
+
+      - name: gofmt (diff-only, fails on drift)
+        run: golangci-lint fmt --diff --enable gofmt
+
+  deploy:
+    name: deploy to ${{ env.CF_ORG }} / ${{ env.CF_SPACE }}
+    needs: gate
+    runs-on: ubuntu-latest
+    # CF_USER / CF_PASSWORD must exist as repository secrets. See README
+    # §"Continuous deployment" for how to set them up and which CF user
+    # identity is expected. If they are missing, `cf auth` below fails
+    # with a clear error; the workflow does not accidentally push with
+    # an empty credential pair.
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: 1.26.x
+
+      - name: Cross-compile static Linux/amd64 binary
+        # CGO_ENABLED=0 avoids a C toolchain dependency on the runner and
+        # produces a fully-static binary the binary_buildpack can launch
+        # with no glibc version coupling. Classic go_buildpack would try
+        # to recompile on the stager and has OOM'd there on eu10 — see
+        # #4 and the walkthrough's Stolpersteine list.
+        run: |
+          mkdir -p bin
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+            go build -tags cloudfoundry -o bin/server ./cmd/server
+          file bin/server
+          ls -lh bin/server
+
+      - name: Install Cloud Foundry CLI v8
+        run: |
+          curl -sSfL "https://packages.cloudfoundry.org/stable?release=linux64-binary&version=v8&source=github" \
+            -o cf8.tgz
+          tar -xzf cf8.tgz cf8
+          sudo install -m 0755 cf8 /usr/local/bin/cf
+          cf --version
+
+      - name: cf auth + target
+        env:
+          CF_USER: ${{ secrets.CF_USER }}
+          CF_PASSWORD: ${{ secrets.CF_PASSWORD }}
+        run: |
+          if [ -z "$CF_USER" ] || [ -z "$CF_PASSWORD" ]; then
+            echo "::error::Repo secrets CF_USER and CF_PASSWORD must be set. See README §Continuous deployment."
+            exit 1
+          fi
+          cf api "$CF_API"
+          cf auth "$CF_USER" "$CF_PASSWORD"
+          cf target -o "$CF_ORG" -s "$CF_SPACE"
+
+      - name: Generate vars.yml from workflow env
+        run: |
+          cat > vars.yml <<EOF
+          backend-host: ${BACKEND_HOST}
+          domain: ${DOMAIN}
+          EOF
+          cat vars.yml
+
+      - name: cf push — backend (binary_buildpack, no stager compile)
+        run: |
+          cf push "$BACKEND_HOST" \
+            -f manifest.yml --vars-file vars.yml \
+            -b binary_buildpack -c './bin/server'
+
+      - name: cf push — approuter (nodejs_buildpack per manifest)
+        run: |
+          cf push "${BACKEND_HOST}-web" -f manifest.yml --vars-file vars.yml
+
+      - name: Smoke test — /healthz
+        run: |
+          url="https://${BACKEND_HOST}-web.${DOMAIN}/healthz"
+          echo "GET $url (expect 200 ok)"
+          # -f fails on HTTP >=400; retry a few times to ride out the
+          # post-deploy warm-up window.
+          curl -fsS --retry 5 --retry-all-errors --retry-delay 3 "$url"
+          echo
+          echo "::notice::Deploy green — /healthz returned 200 ok"
+
+      - name: cf logout (always)
+        if: always()
+        run: cf logout || true

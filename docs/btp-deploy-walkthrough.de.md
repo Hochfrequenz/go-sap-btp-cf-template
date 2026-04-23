@@ -375,11 +375,115 @@ Invoke-WebRequest https://go-btp-mwe-web.cfapps.eu10.hana.ondemand.com/healthz
 
 ---
 
+## Phase 6 — Post-Deploy-Konfiguration und End-to-End-Smoke (Issue #4, Sektionen 4a/5/7)
+
+### 6.1  Sektion 4a — Redirect-URIs an XSUAA übermitteln
+
+Approuter-Route aus Phase 5 ablesen:
+
+```powershell
+cf app go-btp-mwe-web
+# routes: go-btp-mwe-web.cfapps.eu10.hana.ondemand.com
+```
+
+`xs-security.json` lokal um die URL ergänzen:
+
+```json
+"oauth2-configuration": {
+  "redirect-uris": [
+    "https://go-btp-mwe-web.cfapps.eu10.hana.ondemand.com/**"
+  ]
+}
+```
+
+An XSUAA schicken — kein Restage nötig, `redirect-uris` lebt in XSUAA, nicht in `VCAP_SERVICES`:
+
+```powershell
+cf update-service go-xsuaa -c xs-security.json
+# → Update of service instance go-xsuaa complete.
+```
+
+Direkt danach `git restore xs-security.json`, damit die deploy-spezifische URL nicht aus Versehen committet wird.
+Das Repo versendet `redirect-uris: []` — jede Person passt das lokal pro Deploy an.
+
+### 6.2  Sektion 7 — JWT-Audience und -Issuer entsprechen nicht der Code-Erwartung
+
+`GET /api/me` lieferte nach 4a direkt:
+
+```json
+{"error":"invalid token: token has invalid claims: token has invalid audience, token has invalid issuer"}
+```
+
+Statt einen Debug-Push mit Claim-Logging einzuspielen (der Stager litt unter Netzwerk-/Memory-Limits, siehe unten), wurde die tatsächliche Token-Form **ohne** Redeploy ermittelt:
+
+1. XSUAA-Binding aus `cf env go-btp-mwe` gelesen (`clientid`, `clientsecret`, `url`).
+2. Direkt ein `client_credentials`-Token gezogen:
+
+   ```powershell
+   $pair = "$cid`:$sec"
+   $b64  = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($pair))
+   Invoke-WebRequest -UseBasicParsing -Uri "$url/oauth/token" -Method POST `
+     -Headers @{ Authorization = "Basic $b64"; 'Content-Type' = 'application/x-www-form-urlencoded' } `
+     -Body 'grant_type=client_credentials'
+   ```
+
+3. JWT-Payload lokal base64url-dekodiert → die echten `iss`- und `aud`-Werte standen im Klartext vor einem.
+
+Ergebnis:
+
+| Claim | Code-Erwartung (alt) | XSUAA-Realität |
+| --- | --- | --- |
+| `aud` | `xsuaa.XSAppName` — `go-btp-mwe!t7878` | `["openid", "sb-go-btp-mwe!t7878"]` (= `ClientID`) |
+| `iss` | `trimSlash(xsuaa.URL)` — `https://hf-cf.authentication.eu10.hana.ondemand.com` | `http://hf-cf.localhost:8080/uaa/oauth/token` — ein SAP-internes Literal, nicht aus `VCAP_SERVICES` ableitbar |
+
+Fix in [PR #11](https://github.com/Hochfrequenz/go-sap-btp-cloud-foundry-mwe/pull/11): `jwt.WithAudience(xsuaa.ClientID)` und `WithIssuer` ganz fallen lassen.
+Sicherheit bleibt erhalten, weil die JWKS-URL aus dem gebundenen `xsuaa.URL` abgeleitet wird — ein Token aus einem fremden XSUAA-Tenant scheitert schon an der Signaturprüfung.
+
+### 6.3  Phase 5 — vollständiger Smoke durch alle drei Layer
+
+Zum Deploy-Zeitpunkt existierten im `HF CloudFoundry`-Subaccount bereits zwei on-prem Destinationen (`HF_S4`, `HF_S4_210`) plus eine Internet-Destination (`S4HANA_TEST`).
+Es wurde keine neue Destination angelegt; der Go-Code ist bzgl. Destination-Namen nicht fest verdrahtet (`/api/sap/<destination>/...`).
+
+Die drei Smoke-Checks ergaben:
+
+| Check | URL | Ergebnis |
+| --- | --- | --- |
+| `/healthz` | `https://go-btp-mwe-web.cfapps.eu10.hana.ondemand.com/healthz` | `200 ok` in <20 ms, kein Auth |
+| `/api/me` | `https://go-btp-mwe-web.cfapps.eu10.hana.ondemand.com/api/me` | `200` + JSON mit `email`, `given_name`, `family_name`, `scope`, `xs.system.attributes.xs.rolecollections` |
+| `/api/sap/HF_S4/sap/bc/adt/discovery` | auf derselben Host | `200 application/atomsvc+xml`, 23 KB ADT-Service-Dokument aus dem on-prem S/4 |
+
+Der letzte Aufruf exerziert in einem Hop: Approuter → XSUAA → Go-Backend → Destination-Service → Connectivity-Service → Cloud-Connector-Tunnel → on-prem ABAP ADT.
+`/sap/bc/adt/discovery` ist der Standard-CSRF-Preflight-Endpoint aus `Hochfrequenz/adtler` (`adt/client.go:267`) und verlangt nur authentifiziert-als-ADT-Entwickler-Rechte; damit als "erste Probe" für jede neue on-prem-Destination geeignet.
+
+Ein vorheriger Versuch mit `/sap/public/info` lieferte `403` aus dem S/4, aber nicht aus Pipeline-Gründen — die Destination-Auth war erfolgreich (970 ms Latenz war der echte Netzwerk-Roundtrip), nur das Ziel-Endpoint verlangt eine Admin-Rolle, die der Destination-User nicht besitzt. Wichtig für die Wiederholung: `401` zählt bei SAP gegen Login-Lockout, `403` nicht — also nicht in Schleifen-Experimenten `401`-generierende Endpoints anpieken.
+
+### 6.4  Deploy-Strategie: `binary_buildpack`-Override
+
+Für den Fix-Deploy mit dem JWT-Patch scheiterte der klassische `go_buildpack` zweimal:
+
+1. Zuerst zog der Stager via Go-Auto-Toolchain `Go 1.26` nach (go.mod deklariert das), dann wurde der Compile von `github.com/ugorji/go/codec` mit `signal: killed` abgebrochen — OOM im Staging-Container mit nur 128 MB.
+2. Eine Erhöhung auf `memory: 512M` im Manifest war nicht durchsetzbar, weil der Org-Memory-Pool bei 2048 / 2048 MB voll war (9 laufende Apps in allen Spaces).
+
+Workaround, der funktionierte:
+
+```powershell
+$env:GOOS='linux'; $env:GOARCH='amd64'; $env:CGO_ENABLED='0'
+go build -tags cloudfoundry -o bin/server ./cmd/server
+cf push go-btp-mwe -f manifest.yml --vars-file vars.yml -b binary_buildpack -c './bin/server'
+```
+
+Die `manifest.yml` zeigt weiterhin auf `go_buildpack` — d. h. der nächste blanke `cf push` scheitert wieder am Stager.
+Die saubere Variante (Manifest dauerhaft auf `binary_buildpack` umstellen + CI baut die Binary) ist als Follow-up in [Issue #10](https://github.com/Hochfrequenz/go-sap-btp-cloud-foundry-mwe/issues/10) dokumentiert.
+
+---
+
 ## Aktueller Stand
 
-- Phasen 0–5 abgeschlossen.
-- Beide Apps laufen, `/healthz` grün.
-- Weiter: Sektionen 4a (Redirect-URIs in XSUAA), 4b (Role Collection + Zuweisung), optional 4c (Destination), 5 (vollständiger Smoke-Test einschließlich `/api/me`).
+- Phasen 0–6 abgeschlossen.
+- Beide Apps laufen, `/healthz`, `/api/me` und `/api/sap/HF_S4/sap/bc/adt/discovery` grün.
+- Sektion 4b (Role Collection für das benutzerdefinierte `User`-Scope) bleibt offen — blockiert durch fehlende Subaccount-Admin-Rechte, aber für den MWE nicht erforderlich, weil die Go-Middleware keine Scopes prüft.
+- Sektion 4c (Neue Destination `HfSap`) wurde bewusst übersprungen — die bestehende Destination `HF_S4` funktioniert für unseren Testzweck.
+- CD-Pipeline als langfristiges Ziel in #10 getrackt.
 
 ---
 
@@ -395,3 +499,8 @@ Die folgenden Punkte sind bei einer Reproduktion auf einer leeren Windows-Entwic
 6. **Das klassische `go_buildpack` erkennt `cmd/server` nicht automatisch.** `GO_INSTALL_PACKAGE_SPEC: ./cmd/server` ist Pflicht, nicht optional. (Fix in PR #8.)
 7. **Das Cockpit zeigt für Cloud Connectors keinen farbigen "Connected (grün)"-Status pro Zeile.** Stattdessen: oben `Aktive Verbindungen: N`, unten die Liste der aktiven Location-IDs. Erscheint die Location-ID, gilt der CC als verbunden.
 8. **Das eu10-Buildpack ist auf Go 1.23.12 eingefroren.** Go 1.23 ist EOL. Deploys funktionieren heute noch, aber sobald Code post-1.23-Features nutzt, wird der Build brechen.
+9. **Stager-OOM bei großen Dep-Trees.** Der `go_buildpack` zieht via Auto-Toolchain nachträglich `go 1.26` — der Compile von `ugorji/go/codec` sprengte den 128-MB-Stager-Container. Erhöhung der App-Memory half nur, solange der Org-Pool es hergibt; ist er voll, hilft nur lokales Cross-Compile plus `cf push -b binary_buildpack -c './bin/server'`.
+10. **Org-Memory-Quota ist org-weit und limitiert auch den Stager.** Sobald die laufenden Apps die Org-Quota ausreizen, kann keine einzelne App mehr mehr RAM anfordern, weder im Runtime noch im Staging.
+11. **XSUAA `iss` ist ein internes Literal.** Tokens tragen `iss = http://<zone>.localhost:8080/uaa/oauth/token`, nicht aus `VCAP_SERVICES` ableitbar. Entweder nicht prüfen (so der Code hier) oder explizit diesen Pattern hardcoden. `aud` ist `[..., sb-<xsappname>!t<tenant>]` — also `ClientID`, nicht `XSAppName`.
+12. **Claim-Formen lassen sich ohne Debug-Push ermitteln.** `cf env` liefert das XSUAA-Binding, ein `client_credentials`-Token-Request vom Entwickler-Rechner aus liefert einen JWT mit denselben `iss`/`aud`-Konventionen wie der User-Context-Token. Spart einen Redeploy auf Kosten von einmal "trust the pattern".
+13. **`/sap/public/info` eignet sich nicht als erste Destination-Probe.** Verlangt Admin-Rollen, liefert sonst `403`. `/sap/bc/adt/discovery` ist besser — reicht an ADT-Entwickler-Rechte aus und ist der Standard-CSRF-Preflight-Endpoint aus `adtler`.
