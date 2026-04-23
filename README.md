@@ -94,9 +94,65 @@ cf create-service connectivity lite   go-cc
 
 `cf push` (step 4 below) binds them to the app automatically via `manifest.yml`'s `services:` section.
 
-#### 3. (First deploy only) Find out which Go buildpack your landscape uses
+#### 3. (First deploy only) Confirm which Go buildpack your landscape ships
 
-This repo targets the classic `cloudfoundry/go-buildpack`. Paketo's Go buildpack needs different env vars. Run `cf buildpacks` on your target landscape to check — [issue #2](https://github.com/Hochfrequenz/go-sap-btp-cloud-foundry-mwe/issues/2) has the exact comparison and the Paketo edit if needed.
+This repo targets the classic `cloudfoundry/go-buildpack`, with `GO_INSTALL_PACKAGE_SPEC: ./cmd/server` set in `manifest.yml` so the buildpack knows where `main` lives (it does not auto-discover subpackages the way Paketo does). If `cf buildpacks` on your landscape shows `paketo-buildpacks/go` instead, replace the `buildpacks:` block with:
+
+```yaml
+buildpacks:
+  - paketo-buildpacks/go
+env:
+  GIN_MODE: release
+  BP_GO_TARGETS: ./cmd/server
+```
+
+Confirmed working on eu10 (AWS Frankfurt) with `go_buildpack` cflinuxfs4 v1.10.44 — [see the walkthrough](docs/btp-deploy-walkthrough.de.md) (DE) for the full replay.
+
+### Pre-flight gotchas
+
+Compiled from the first real deploy on SAP's `eu10` landscape in April 2026.
+Two conventions to keep in mind while reading this section:
+
+- `<angle-brackets>` mark values you substitute for your own deploy — they are reusable patterns.
+- `` `backticks on specific strings` `` mark the concrete values I used on Hochfrequenz's subaccount (e.g. `eu10`, `go-btp-mwe`, `go_buildpack cflinuxfs4 v1.10.44`), shown for illustration only — change them for yours.
+
+1. **Org-level route quota, not space-level.**
+   `cf routes` only lists the currently-targeted space, but the route quota is an **org-wide** limit.
+   Before `cf push`, confirm at least **two** free route slots (one per app — backend + approuter):
+
+   ```sh
+   # Set this to the name shown under "org:" in 'cf target' (HF example: "HF Dev Account_hf-cf"):
+   ORG="<your-cf-org-name>"
+
+   ORG_GUID=$(cf org "$ORG" --guid)
+   QUOTA_GUID=$(cf curl "/v3/organizations/$ORG_GUID" | jq -r .relationships.quota.data.guid)
+
+   echo "Used:  $(cf curl "/v3/routes?per_page=100&organization_guids=$ORG_GUID" | jq .pagination.total_results)"
+   echo "Quota: $(cf curl "/v3/organization_quotas/$QUOTA_GUID"                  | jq .routes.total_routes)"
+   ```
+
+   If you're within 2 of the quota, either free slots by removing a stopped app with its routes (`cf delete <app-name> -r -f` — note that `-r` can free *more* slots than `cf routes` in the current space suggested, because orphan routes from other spaces travel with the app), or ask a global-account admin to raise the quota.
+   Symptom when ignored: `Routes quota exceeded for organization '<org>'`, raised before staging begins.
+
+2. **SAP's `go_buildpack` lags upstream Go.**
+   On `eu10` as of April 2026 the buildpack `go_buildpack` cflinuxfs4 v1.10.44 installs **Go 1.23.12**, which has gone out of support since Go 1.26 was released.
+   Our `go.mod` declares `go 1.26`, and staging still succeeds on `eu10` — because Go's auto-toolchain feature fetches the newer toolchain over the network when the stager allows egress.
+   If your landscape blocks egress from build containers, the stager will fail with `go.mod requires go >= 1.26 (running go 1.23.12)` instead.
+   Do not assume post-1.23 language or stdlib features will work in production without testing first.
+
+3. **The cockpit steps in section 5b + 5c below require subaccount admin rights.**
+   Creating a Role Collection and creating a Destination are both blocked for a plain Space Developer.
+   A `cf push` will succeed and then stall on permissions when you try to click through the cockpit.
+   Check with whoever administers your subaccount before starting.
+
+4. **The cockpit URL pattern you may remember has changed in some regions.**
+   The historical `https://cockpit.<region>.hana.ondemand.com/` pattern has been replaced — e.g. EMEA is now at `https://emea.cockpit.btp.cloud.sap/cockpit`.
+   The stable portable entry is `https://account.hana.ondemand.com/`, which redirects to whichever regional cockpit your user belongs to.
+
+5. **Windows-only: winget quirks for the CF CLI (skip if not on Windows).**
+   The correct winget package ID is `CloudFoundry.CLI.v8` (or `.v7` for the previous major).
+   `CloudFoundry.CloudFoundryCLI` — a plausible-looking ID — does **not** exist and `winget install` will refuse it.
+   After `winget install`, close and reopen your terminal before running `cf`; already-open shells keep their old `PATH` and will report `cf: command not found` even though the binary is installed.
 
 ### 4. cf push
 
