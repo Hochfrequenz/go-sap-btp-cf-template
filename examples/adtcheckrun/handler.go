@@ -55,11 +55,11 @@ func Register(api *gin.RouterGroup, svc btp.OnPremMutator) {
 }
 
 // Handler is the actual request handler. Depends on the narrow
-// btp.OnPremMutator interface (not *btp.Service), so unit tests
-// substitute a one-method fake without standing up the XSUAA /
-// Destination / Cloud Connector stack. The CSRF handshake is the
-// Service's concern, not the handler's — a real svc.
-// CallOnPremiseMutating does the fetch/attach/retry dance; the
+// btp.OnPremMutator interface, not on the concrete Service type,
+// so unit tests substitute a one-method fake without standing up
+// the XSUAA / Destination / Cloud Connector stack. The CSRF
+// handshake is the Service's concern, not the handler's — a real
+// svc.CallOnPremiseMutating does the fetch/attach/retry dance; the
 // fake in handler_test.go does not need to.
 func Handler(svc btp.OnPremMutator) gin.HandlerFunc {
 	const destinationName = "HF_S4"
