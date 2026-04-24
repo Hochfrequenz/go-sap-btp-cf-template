@@ -48,10 +48,10 @@ func Register(api *gin.RouterGroup, svc btp.OnPremCaller) {
 }
 
 // Handler is the actual request handler. Depends on the narrow
-// btp.OnPremCaller interface (not *btp.Service), so unit tests
-// substitute a one-method fake without needing to stand up the
-// XSUAA / Destination / Cloud Connector stack. See handler_test.go
-// in this package for the canonical mock pattern.
+// btp.OnPremCaller interface, not on the concrete Service type, so
+// unit tests substitute a one-method fake without needing to stand
+// up the XSUAA / Destination / Cloud Connector stack. See
+// handler_test.go in this package for the canonical mock pattern.
 func Handler(svc btp.OnPremCaller) gin.HandlerFunc {
 	// destinationName would usually come from configuration or a route
 	// parameter; hard-coded here so the example stays self-contained.

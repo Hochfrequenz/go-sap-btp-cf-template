@@ -37,6 +37,7 @@ internal/btp/
   proxy.go                  http.RoundTripper tunnelling via Connectivity proxy
   auth.go                   XSUAA JWT middleware (signature, aud, exp; see doc)
   authenticator.go          pluggable DestinationAuthenticator registry
+  doc.go                    library-intent surface list (what forks may depend on)
   httperr.go                typed error envelope + AbortError helper
   middleware.go             RequestID + RequireScope helpers
   service.go                orchestrates the three-leg call + CSRF handshake for writes
@@ -330,7 +331,9 @@ type OnPremCaller interface {
 }
 ```
 
-`*btp.Service` satisfies it in production. Tests substitute a one-method fake that records the request the handler produced and returns a canned response — no XSUAA, no Destination lookup, no Cloud Connector tunnel, no ABAP.
+The concrete `Service` type satisfies it in production. Tests substitute a one-method fake that records the request the handler produced and returns a canned response — no XSUAA, no Destination lookup, no Cloud Connector tunnel, no ABAP.
+
+> **Library-intent surface.** The set of identifiers handlers are allowed to lean on lives at [`internal/btp/doc.go`](internal/btp/doc.go). Anything else in the package is template-internal and may move without notice. A CI gate blocks PRs that add a dependency on the concrete `Service` type from outside `cmd/server/main.go`.
 
 The canonical test lives next to the example handler: [`examples/invoicesync/handler_test.go`](examples/invoicesync/handler_test.go). Its shape:
 
