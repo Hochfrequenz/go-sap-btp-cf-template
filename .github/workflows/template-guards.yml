@@ -118,15 +118,19 @@ jobs:
           #   - config.yml                : source of truth read by the
           #                                 rewriter (not output).
           #   - README.md / docs/         : prose about this template.
-          #   - .github/ / *.yml / *.yaml : this workflow references the
-          #                                 path in docstrings, allow.
+          #   - template-guards.yml       : this very workflow; quotes
+          #                                 the literal in its rg call.
+          #
+          # Note: --no-ignore-vcs disables .gitignore-driven skipping so
+          # .github/ and other dotfiles are scanned; we re-exclude
+          # vendor / node_modules explicitly below.
           if rg -n --hidden --no-ignore-vcs \
               --glob '!go.mod' --glob '!go.sum' \
               --glob '!*.go' \
               --glob '!cmd/apply-config/**' \
               --glob '!config.yml' \
               --glob '!README.md' --glob '!docs/**' \
-              --glob '!.github/**' \
+              --glob '!.github/workflows/template-guards.yml' \
               --glob '!.git/**' \
               --glob '!vendor/**' --glob '!node_modules/**' \
               'github\.com/hochfrequenz/go-sap-btp-cloud-foundry-mwe' .; then
