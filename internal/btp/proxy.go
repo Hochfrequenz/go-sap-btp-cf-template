@@ -50,6 +50,14 @@ func NewOnPremiseTransport(conn *ConnCredentials, provider ConnTokenProvider) (h
 			// existing ConnTokenProvider signature takes *http.Request,
 			// so we hand it a bare request carrying the right context.
 			// The provider reads ctx.Done / request cancellation only.
+			//
+			// For HTTPS targets this provider is called twice per
+			// request (once here for the CONNECT header, once in
+			// RoundTrip for the body-leg Proxy-Authorization). The
+			// production TokenFetcher caches, so both calls are
+			// cache hits on the hot path and the second call is a
+			// sync.Map lookup. First call after cache expiry is the
+			// only case that re-fetches twice.
 			tok, err := provider((&http.Request{}).WithContext(ctx))
 			if err != nil {
 				return nil, err
