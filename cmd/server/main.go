@@ -131,8 +131,11 @@ func logLevelFromEnv() slog.Level {
 // The `caller` parameter is the reach-in point forks add their own
 // handlers on — the invoicesync example is wired below (commented
 // out) to show the pattern.
-func buildRouter(validator *btp.JWTValidator, caller btp.OnPremCaller, proxyHandler gin.HandlerFunc, logger *slog.Logger) *gin.Engine {
-	_ = caller // used by downstream handlers; see the Register call below
+func buildRouter(validator *btp.JWTValidator, _ btp.OnPremCaller, proxyHandler gin.HandlerFunc, logger *slog.Logger) *gin.Engine {
+	// `caller` is unnamed (`_`) because the bare template has no handler
+	// that uses it yet. A fork adds its first handler by renaming `_` →
+	// `caller` and calling e.g. `invoicesync.Register(api, caller)` —
+	// a one-line change, not a signature change that ripples into main().
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
 	// The backend app is directly reachable on its .cfapps.* route, not
