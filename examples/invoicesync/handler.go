@@ -107,6 +107,11 @@ func Handler(svc btp.OnPremCaller) gin.HandlerFunc {
 // expects. Keeping this as a named struct (rather than map[string]any)
 // makes the outbound shape as visible and compiler-checked as the
 // inbound Request — matching the README's "type everything" rule.
+//
+// Field names are SAP FI conventions: BUKRS = Buchungskreis (company
+// code), BUDAT = Buchungsdatum (posting date), WAERS = Währung
+// (currency), XBLNR = Externe Referenz. Any ABAP REST handler on the
+// SAP side typically binds against exactly these names.
 type abapPayload struct {
 	CompanyCode string `json:"BUKRS"`
 	PostingDate string `json:"BUDAT"`
