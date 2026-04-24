@@ -40,9 +40,12 @@ type ErrorDetail struct {
 	RequestID string    `json:"request_id,omitempty"`
 }
 
-// AbortError writes the error envelope, logs the underlying Go error
-// server-side (never exposed to the client), and aborts the handler
-// chain.
+// AbortError is the only blessed way to write an error response in
+// this codebase. It constructs the envelope, logs the underlying Go
+// error server-side (never exposed to the client), and aborts the
+// handler chain. Handlers that hand-construct ErrorEnvelope values
+// bypass the logging side and break the contract the tests pin —
+// don't do it unless you're deliberately extending the helper.
 //
 // Split of concerns:
 //   - `userMsg` is what the client sees — always safe, always stable.
