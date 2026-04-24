@@ -92,7 +92,12 @@ jobs:
           # rewritten tree (outside cmd/apply-config which holds the
           # rewriter's internals and legitimately carries the original
           # module path as a test fixture).
-          if grep -rn --include='*.go' --exclude-dir=cmd/apply-config \
+          #
+          # grep --exclude-dir matches directory *basenames*, not paths —
+          # `--exclude-dir=apply-config` is what actually skips
+          # cmd/apply-config/. Using the full path silently never
+          # matches and the gate fires on every run.
+          if grep -rn --include='*.go' --exclude-dir=apply-config \
               'github.com/hochfrequenz/go-sap-btp-cloud-foundry-mwe' .; then
             echo "::error::stale module path survived apply-config" >&2
             exit 1
