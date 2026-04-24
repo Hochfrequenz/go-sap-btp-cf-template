@@ -3,6 +3,7 @@ package invoicesync_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -134,7 +135,7 @@ func Test_Handler_SurfacesSAPErrorAs502(t *testing.T) {
 	// When svc.CallOnPremise returns an error (e.g. the on-prem system
 	// is unreachable), the handler should surface a 502 with the error
 	// as message — not a 500.
-	fake := &fakeOnPrem{err: errFakeUnreachable}
+	fake := &fakeOnPrem{err: errors.New("on-prem system unreachable")}
 	r := newRouter(fake)
 
 	body := `{"company_code":"1000","posting_date":"2026-04-23T00:00:00Z","amount_cents":1,"currency":"EUR"}`
@@ -146,12 +147,3 @@ func Test_Handler_SurfacesSAPErrorAs502(t *testing.T) {
 	then.AssertThat(t, w.Code, is.EqualTo(http.StatusBadGateway))
 	then.AssertThat(t, strings.Contains(w.Body.String(), "unreachable"), is.True())
 }
-
-// errFakeUnreachable stands in for whatever failure Service.CallOnPremise
-// could surface (connectivity token fetch, destination lookup, on-prem
-// DNS, etc.) — the handler does not distinguish, it just 502s.
-var errFakeUnreachable = &fakeErr{"on-prem system unreachable"}
-
-type fakeErr struct{ s string }
-
-func (e *fakeErr) Error() string { return e.s }

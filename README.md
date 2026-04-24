@@ -130,7 +130,7 @@ type Request struct {
     // ... more fields with validation tags
 }
 
-func Handler(svc *btp.Service) gin.HandlerFunc {
+func Handler(svc btp.OnPremCaller) gin.HandlerFunc {
     return func(c *gin.Context) {
         var req Request
         if err := c.ShouldBindJSON(&req); err != nil {            // step 2: validate
@@ -191,6 +191,8 @@ Two things to apply the same discipline to, that are easy to forget:
 ---
 
 ### Test your handler without touching SAP
+
+> **Coming from ABAP?** Unit-testing in Go is nothing like testing in the SAP stack, and this is good news. A Go test compiles and runs in well under a second — no transport request round-trip, no test user to maintain, no colleague's session to lock, no data to clean up in table `BKPF` afterwards. The red-green-refactor loop that never really worked in ABAP works here because the feedback is cheap. If that sounds unfamiliar, the three tests in this sub-section are a good first encounter: copy them, break something in the handler, watch the test fail in 0.3 s, fix it, watch it pass. That's the whole loop.
 
 Integration-testing against a real on-prem SAP is a pain: transport requests, user lockouts, Short Dumps on edge cases, an ABAP stack that boots in minutes. The template is designed so you almost never have to. Every handler depends on the narrow `btp.OnPremCaller` interface rather than the concrete `*btp.Service`:
 
