@@ -23,9 +23,10 @@
 // ## Service & on-prem plumbing
 //
 //   - [Service], [NewService]
-//   - [OnPremCaller]            — interface handlers should depend on for reads
-//   - [OnPremMutator]           — interface handlers should depend on for writes (CSRF)
-//   - [*Service.ProxyHandler]   — Gin handler exposed for the demo /api/sap/ route
+//   - [OnPremCaller]                — interface handlers should depend on for reads
+//   - [OnPremMutator]               — interface handlers should depend on for writes (CSRF)
+//   - [*Service.ProxyHandler]       — Gin handler exposed for the demo /api/sap/ route
+//   - [*Service.Authenticators]     — registry accessor for startup wiring of SSO / PP / …
 //   - [NewOnPremiseTransport], [ConnTokenProvider]
 //   - [ServiceOption], [WithUserAgent], [WithMgmtTimeout], [WithOnPremiseTimeout], [WithCSRFFetchPath]
 //   - [DefaultOnPremiseTimeout], [DefaultMgmtTimeout], [DefaultUserAgent], [DefaultCSRFFetchPath]
