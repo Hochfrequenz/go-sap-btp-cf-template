@@ -11,8 +11,17 @@
 # Output of the go coverage tool, specifically when used with LiteIDE
 *.out
 
-# Dependency directories (remove the comment below to include it)
-# vendor/
+# go mod vendor output — used as a manual escape hatch when the eu10
+# stager can't download the dep tree in time; not committed. Decide per
+# fork whether to commit it (reproducible deploys without network) or
+# keep regenerating (leaner repo).
+vendor/
+
+# Cross-compiled binary produced for `cf push -b binary_buildpack -c
+# './bin/server'`. The deploy workflow writes it on the runner; a
+# manual laptop-side cross-compile (see README §4 escape hatch) writes
+# the same path locally. Never committed.
+bin/
 
 # Local CF-push variables (copied from vars.example.yml, holds per-deploy values)
 vars.yml

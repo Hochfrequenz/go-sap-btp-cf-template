@@ -388,6 +388,18 @@ backend-host: go-btp-mwe
 domain: cfapps.eu10.hana.ondemand.com
 ```
 
+> **Manual push on `eu10` commonly OOMs — use the same escape hatch the CD workflow uses.** SAP's `go_buildpack` on `eu10` installed Go 1.23.12 in April 2026; our `go.mod` declares `go 1.26`, so the stager fetches Go's auto-toolchain over the wire and then OOMs while compiling the dep tree (documented in detail under [Pre-flight gotchas](#pre-flight-gotchas) above). The CD workflow at `.github/workflows/deploy.yml` bypasses this by cross-compiling a static Linux binary on the runner and pushing with `binary_buildpack -c './bin/server'`. If you're pushing from your laptop, the same two commands work:
+>
+> ```powershell
+> $env:GOOS='linux'; $env:GOARCH='amd64'; $env:CGO_ENABLED='0'
+> go build -tags cloudfoundry -o bin/server ./cmd/server
+> cf push "$BACKEND_HOST" -f manifest.yml --vars-file vars.yml -b binary_buildpack -c './bin/server'
+> # Approuter uses its own buildpack and doesn't need the -b/-c overrides:
+> cf push "$BACKEND_HOST-web" -f manifest.yml --vars-file vars.yml
+> ```
+>
+> On bash/zsh use `GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ...`.
+
 ### 5. Post-deploy manual steps (required for the app to work)
 
 Even after a green `cf push`, three things still need to be done by a human in the BTP cockpit before requests succeed. Each is a one-time chore per deploy — expand the step you're on:
