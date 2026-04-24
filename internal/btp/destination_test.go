@@ -10,7 +10,7 @@ import (
 	"github.com/corbym/gocrest/is"
 	"github.com/corbym/gocrest/then"
 
-	"github.com/hochfrequenz/go-sap-btp-cloud-foundry-mwe/internal/btp"
+	"github.com/hochfrequenz/go-sap-btp-cf-template/internal/btp"
 )
 
 func Test_LookupDestination_EnvelopeResponse(t *testing.T) {

@@ -1,6 +1,6 @@
-# go-sap-btp-cloud-foundry-mwe
+# go-sap-btp-cf-template
 
-A minimal working example of a Go webservice that:
+A starter template for Go webservices on SAP BTP Cloud Foundry. Fork it, run `go run ./cmd/apply-config` to rewrite module path / app name / CF coordinates from a single `config.yml`, build `./bin/server`, `cf push`. It:
 
 - runs on **SAP BTP Cloud Foundry** (two apps: Go backend + SAP approuter),
 - authenticates users via **XSUAA** (JWKS-pinned JWT validation: RS256 signature, audience, expiry — see `internal/btp/auth.go` for why issuer is intentionally not checked),
@@ -57,7 +57,7 @@ All per-deployment string values (app name, Go module path, CF subaccount coordi
 Recommended flow after forking:
 
 ```sh
-gh repo create my-org/my-app --template Hochfrequenz/go-sap-btp-cloud-foundry-mwe
+gh repo create my-org/my-app --template Hochfrequenz/go-sap-btp-cf-template
 cd my-app
 $EDITOR config.yml                            # adjust app.name, app.module, cf.* etc.
 

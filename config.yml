@@ -22,7 +22,7 @@ app:
 
   # Go module path — exactly what ends up in go.mod and in every Go
   # import. Host/org/repo style, e.g. github.com/yourorg/your-repo.
-  module: github.com/hochfrequenz/go-sap-btp-cloud-foundry-mwe
+  module: github.com/hochfrequenz/go-sap-btp-cf-template
 
 # CF service instance names the backend binds to. Leave any field blank
 # to derive it as `<app.name>-xsuaa` / `-dest` / `-cc`.

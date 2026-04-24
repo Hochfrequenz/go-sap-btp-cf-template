@@ -17,7 +17,7 @@ import (
 	"github.com/corbym/gocrest/then"
 	"github.com/gin-gonic/gin"
 
-	"github.com/hochfrequenz/go-sap-btp-cloud-foundry-mwe/internal/btp"
+	"github.com/hochfrequenz/go-sap-btp-cf-template/internal/btp"
 )
 
 // btpStack spins up three httptest servers standing in for XSUAA, the
@@ -155,7 +155,7 @@ func Test_Service_CallOnPremise_EndToEnd(t *testing.T) {
 	// Cookie was filtered out.
 	then.AssertThat(t, resp.Header.Get("X-Received-Cookie"), is.EqualTo(""))
 	// Neutral UA set when caller didn't supply one.
-	then.AssertThat(t, strings.Contains(resp.Header.Get("X-Received-UA"), "go-sap-btp-cloud-foundry-mwe"), is.True())
+	then.AssertThat(t, strings.Contains(resp.Header.Get("X-Received-UA"), "go-sap-btp-cf-template"), is.True())
 	// Location ID forwarded from the destination.
 	then.AssertThat(t, resp.Header.Get("X-Received-Location"), is.EqualTo("loc-42"))
 	// Exactly two XSUAA exchanges: one for dest-service, one for connectivity.

@@ -13,7 +13,7 @@ import (
 	"github.com/corbym/gocrest/then"
 	"github.com/gin-gonic/gin"
 
-	"github.com/hochfrequenz/go-sap-btp-cloud-foundry-mwe/internal/btp"
+	"github.com/hochfrequenz/go-sap-btp-cf-template/internal/btp"
 )
 
 // Test_logLevelFromEnv_MapsKnownAndUnknown pins the LOG_LEVEL contract

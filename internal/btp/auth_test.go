@@ -20,7 +20,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 
-	"github.com/hochfrequenz/go-sap-btp-cloud-foundry-mwe/internal/btp"
+	"github.com/hochfrequenz/go-sap-btp-cf-template/internal/btp"
 )
 
 // jwksFixture stands up an RSA keypair and an httptest server that serves

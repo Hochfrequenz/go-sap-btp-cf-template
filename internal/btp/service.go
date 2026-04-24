@@ -95,7 +95,7 @@ const DefaultMgmtTimeout = 10 * time.Second
 // should set an explicit UA so traces on the SAP side can distinguish
 // the caller from the template — see cmd/server/main.go for the
 // debug.ReadBuildInfo pattern.
-const DefaultUserAgent = "go-sap-btp-cloud-foundry-mwe/0.1"
+const DefaultUserAgent = "go-sap-btp-cf-template/0.1"
 
 // DefaultCSRFFetchPath is the SAP path CallOnPremiseMutating calls
 // with `X-CSRF-Token: Fetch` to retrieve a token. Defaults to ADT's
