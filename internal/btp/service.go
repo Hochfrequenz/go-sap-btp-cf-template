@@ -13,9 +13,25 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// OnPremCaller is the single-method contract Gin handlers should depend
+// on for on-premise calls. *Service satisfies it in production; unit
+// tests substitute a fake with one method to exercise handler logic
+// without standing up the XSUAA / Destination / Cloud Connector stack.
+//
+// Signature mirrors Service.CallOnPremise exactly, so the interface is
+// a no-op refactor for existing callers: swap the handler's parameter
+// type from *Service to OnPremCaller and every call site keeps compiling.
+type OnPremCaller interface {
+	CallOnPremise(ctx context.Context, destName, method, pathSuffix string,
+		headers http.Header, body io.Reader) (*http.Response, error)
+}
+
 // Service orchestrates a call to an on-premise SAP system behind the Cloud
 // Connector: destination lookup → connectivity token → proxied call with the
 // right auth headers. Safe for concurrent use.
+//
+// Service satisfies the OnPremCaller interface — handlers should accept
+// that interface rather than *Service so unit tests can substitute a fake.
 type Service struct {
 	env            *Env
 	tokens         *TokenFetcher
