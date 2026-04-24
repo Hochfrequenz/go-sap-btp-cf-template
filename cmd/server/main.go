@@ -83,7 +83,9 @@ func buildRouter(validator *btp.JWTValidator, svc *btp.Service, logger *slog.Log
 	// would let a direct caller forge c.ClientIP(). nil trusts nobody; the
 	// logged IP is always the real TCP peer.
 	_ = r.SetTrustedProxies(nil)
-	r.Use(gin.Recovery(), requestLog(logger))
+	// Middleware order matters: RequestID first so both the access log
+	// and any btp.AbortError envelope can pick up the same ID.
+	r.Use(gin.Recovery(), btp.RequestID(), requestLog(logger))
 
 	r.GET("/healthz", func(c *gin.Context) {
 		c.String(http.StatusOK, "ok")
@@ -102,19 +104,31 @@ func buildRouter(validator *btp.JWTValidator, svc *btp.Service, logger *slog.Log
 	return r
 }
 
-// requestLog is a minimal structured access logger. gin.Logger() is fine in
-// dev but emits plain text that doesn't play nicely with BTP's application
-// logging service.
+// requestLog is a minimal structured access logger. gin.Logger() is fine
+// in dev but emits plain text that doesn't play nicely with BTP's
+// application logging service.
+//
+// Deliberate omissions:
+//   - Query string is NOT logged. Downstream services that put an ID
+//     or email in ?owner=… shouldn't have it land in the access log
+//     as a side effect. If a route needs that context, it belongs in
+//     the handler's slog line (audit trail), not in this generic one.
+//   - JWT claims are NOT logged. This is the access log — one line per
+//     request, no user identity. Handler-level slog.InfoContext with
+//     the claim is the right place.
 func requestLog(logger *slog.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
 		c.Next()
+		rid, _ := c.Get(btp.RequestIDContextKey)
+		ridStr, _ := rid.(string)
 		logger.Info("http",
 			"method", c.Request.Method,
 			"path", c.Request.URL.Path,
 			"status", c.Writer.Status(),
 			"duration_ms", time.Since(start).Milliseconds(),
 			"client_ip", c.ClientIP(),
+			"request_id", ridStr,
 		)
 	}
 }
