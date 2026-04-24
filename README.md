@@ -190,6 +190,69 @@ Two things to apply the same discipline to, that are easy to forget:
 
 ---
 
+### Test your handler without touching SAP
+
+Integration-testing against a real on-prem SAP is a pain: transport requests, user lockouts, Short Dumps on edge cases, an ABAP stack that boots in minutes. The template is designed so you almost never have to. Every handler depends on the narrow `btp.OnPremCaller` interface rather than the concrete `*btp.Service`:
+
+```go
+// internal/btp/service.go — the contract handlers should depend on:
+type OnPremCaller interface {
+    CallOnPremise(ctx context.Context, destName, method, pathSuffix string,
+        headers http.Header, body io.Reader) (*http.Response, error)
+}
+```
+
+`*btp.Service` satisfies it in production. Tests substitute a one-method fake that records the request the handler produced and returns a canned response — no XSUAA, no Destination lookup, no Cloud Connector tunnel, no ABAP.
+
+The canonical test lives next to the example handler: [`examples/invoicesync/handler_test.go`](examples/invoicesync/handler_test.go). Its shape:
+
+```go
+type fakeOnPrem struct {
+    gotDest, gotMethod, gotPath string
+    gotBody                     []byte
+    resp                        *http.Response
+    err                         error
+}
+
+func (f *fakeOnPrem) CallOnPremise(_ context.Context, dest, method, path string,
+    _ http.Header, body io.Reader) (*http.Response, error) {
+    f.gotDest, f.gotMethod, f.gotPath = dest, method, path
+    if body != nil { f.gotBody, _ = io.ReadAll(body) }
+    return f.resp, f.err
+}
+
+func Test_Handler_MarshalsRequestIntoABAPShape(t *testing.T) {
+    fake := &fakeOnPrem{resp: &http.Response{
+        StatusCode: http.StatusOK,
+        Body:       io.NopCloser(strings.NewReader(`{"ok":true}`)),
+    }}
+    r := newRouter(fake) // see the test file for the gin setup helper
+
+    req := httptest.NewRequest(http.MethodPost, "/invoice-sync",
+        strings.NewReader(`{"company_code":"1000", ...}`))
+    req.Header.Set("Content-Type", "application/json")
+    w := httptest.NewRecorder()
+    r.ServeHTTP(w, req)
+
+    // Assert what the handler did with SAP.
+    then.AssertThat(t, fake.gotDest,   is.EqualTo("HF_S4"))
+    then.AssertThat(t, fake.gotPath,   is.EqualTo("/sap/bc/rest/zmy_invoice_sync"))
+    // Decode fake.gotBody into your expected ABAP-side struct and assert field by field.
+}
+```
+
+> **Stay typed all the way through.** The test decodes `fake.gotBody` into a **named struct** that describes the ABAP-side shape (BUKRS / WAERS / …) — not into `map[string]any`. Every place where JSON crosses a boundary in this template — caller → handler, handler → SAP, SAP response → caller — is asserted through typed Go. A failed field name or a wrong type fails at compile time or at a typed unmarshal, never silently as "oh, that key was missing from the map".
+
+The full test file shows three cases worth copying into your own handler tests:
+
+1. **Happy path** — valid payload, fake returns 200, handler translates to the expected typed ABAP shape and forwards.
+2. **Validation fails before SAP** — an invalid payload must 400 **without ever calling `CallOnPremise`** (the test asserts the fake was not invoked).
+3. **On-prem error surfaces as 502** — when the fake returns an error, the handler responds 502, not 500.
+
+If you need to exercise the three-leg token dance end-to-end (destination lookup + XSUAA client_credentials + Connectivity token + Cloud Connector proxy), the heavier `httptest.NewServer` pattern is in [`internal/btp/service_test.go`](internal/btp/service_test.go). For everyday handler work the interface-plus-fake pattern above is faster and more targeted.
+
+---
+
 ### What you do NOT need to understand
 
 The middleware and service code hide most of the BTP specifics. For the 80 % case you can assume each of the following without looking:

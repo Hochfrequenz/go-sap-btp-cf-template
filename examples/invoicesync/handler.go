@@ -43,14 +43,16 @@ type Request struct {
 // Register attaches the /invoice-sync endpoint to the JWT-guarded `api`
 // group. Call this from cmd/server/main.go's buildRouter alongside the
 // other route registrations.
-func Register(api *gin.RouterGroup, svc *btp.Service) {
+func Register(api *gin.RouterGroup, svc btp.OnPremCaller) {
 	api.POST("/invoice-sync", Handler(svc))
 }
 
-// Handler is the actual request handler. Split from Register so it's
-// easy to unit-test with a fixture-built btp.Service (see
-// internal/btp/service_test.go for the stub patterns).
-func Handler(svc *btp.Service) gin.HandlerFunc {
+// Handler is the actual request handler. Depends on the narrow
+// btp.OnPremCaller interface (not *btp.Service), so unit tests
+// substitute a one-method fake without needing to stand up the
+// XSUAA / Destination / Cloud Connector stack. See handler_test.go
+// in this package for the canonical mock pattern.
+func Handler(svc btp.OnPremCaller) gin.HandlerFunc {
 	// destinationName would usually come from configuration or a route
 	// parameter; hard-coded here so the example stays self-contained.
 	const destinationName = "HF_S4"
