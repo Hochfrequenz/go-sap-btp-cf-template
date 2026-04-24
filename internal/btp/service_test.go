@@ -364,6 +364,7 @@ func Test_Service_CallOnPremise_RejectsPercentEncodedPath(t *testing.T) {
 		"/foo/%2e%2e/bar",
 		"/foo/%2E%2E/bar",
 		"/foo/%2e./bar",
+		"/foo/%2e%2e%2fbar",
 		"/foo%20bar",
 	}
 	for _, suffix := range cases {
