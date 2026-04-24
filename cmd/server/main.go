@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"syscall"
 	"time"
 
@@ -38,7 +39,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	svc, err := btp.NewService(env)
+	svc, err := btp.NewService(env, btp.WithUserAgent(buildUserAgent()))
 	if err != nil {
 		logger.Error("btp service init failed", "err", err)
 		os.Exit(1)
@@ -102,6 +103,25 @@ func buildRouter(validator *btp.JWTValidator, svc *btp.Service, logger *slog.Log
 	api.Any("/sap/:destination/*path", svc.ProxyHandler)
 
 	return r
+}
+
+// buildUserAgent derives a traceable User-Agent from the compiled binary's
+// module path and version. Passing this through to btp.NewService means
+// SAP-side access logs and oncall traces see "my-service/v1.2.3" rather
+// than the template's literal name — exactly the move each fork should
+// make. debug.ReadBuildInfo can fail for unusual build setups (test
+// binaries, `go run`); the fallback keeps the service bootable.
+func buildUserAgent() string {
+	if info, ok := debug.ReadBuildInfo(); ok {
+		if p := info.Main.Path; p != "" && p != "command-line-arguments" {
+			ver := info.Main.Version
+			if ver == "" || ver == "(devel)" {
+				ver = "dev"
+			}
+			return p + "/" + ver
+		}
+	}
+	return btp.DefaultUserAgent
 }
 
 // requestLog is a minimal structured access logger. gin.Logger() is fine

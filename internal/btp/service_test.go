@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/corbym/gocrest/is"
 	"github.com/corbym/gocrest/then"
@@ -372,6 +373,81 @@ func Test_Service_CallOnPremise_RejectsPercentEncodedPath(t *testing.T) {
 		then.AssertThat(t, err, is.Not(is.Nil()))
 		then.AssertThat(t, strings.Contains(err.Error(), "percent-encoded"), is.True())
 	}
+}
+
+// Test_Service_CallOnPremise_WithUserAgentOverride pins the option-knob
+// half of issue #21: the template's default UA is a placeholder; forks
+// should set their own via btp.WithUserAgent so SAP-side traces can tell
+// callers apart.
+func Test_Service_CallOnPremise_WithUserAgentOverride(t *testing.T) {
+	s := newBTPStack(t, "placeholder")
+	s = newBTPStack(t, fmt.Sprintf(`{
+		"destinationConfiguration":{"Name":"D","Type":"HTTP","URL":%q,"Authentication":"NoAuthentication","ProxyType":"OnPremise"}
+	}`, s.onPrem.URL))
+
+	svc, err := btp.NewService(s.env, btp.WithUserAgent("my-service/v1.2.3"))
+	then.AssertThat(t, err, is.Nil())
+
+	resp, err := svc.CallOnPremise(context.Background(), "D", http.MethodGet, "/x", nil, nil)
+	then.AssertThat(t, err, is.Nil())
+	defer func() { _ = resp.Body.Close() }()
+	then.AssertThat(t, resp.Header.Get("X-Received-UA"), is.EqualTo("my-service/v1.2.3"))
+}
+
+// Test_Service_CallOnPremise_WithOnPremiseTimeout proves the timeout
+// option actually reaches the http.Client wrapping the on-prem transport.
+// We stand up an on-prem server that sleeps longer than the configured
+// budget; the call must fail with a timeout-shaped error.
+func Test_Service_CallOnPremise_WithOnPremiseTimeout(t *testing.T) {
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(200 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer slow.Close()
+
+	s := newBTPStack(t, "placeholder")
+	s = newBTPStack(t, fmt.Sprintf(`{
+		"destinationConfiguration":{"Name":"D","Type":"HTTP","URL":%q,"Authentication":"NoAuthentication","ProxyType":"OnPremise"}
+	}`, slow.URL))
+	// Redirect the stack's proxy to the slow server too, so the whole
+	// call chain routes through it.
+	s.proxy.Close()
+	s.proxy = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.Header.Get("Proxy-Authorization"), "Bearer ") {
+			http.Error(w, "missing proxy auth", http.StatusProxyAuthRequired)
+			return
+		}
+		u, err := url.Parse(r.RequestURI)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		outReq, _ := http.NewRequestWithContext(r.Context(), r.Method, slow.URL+u.Path, r.Body)
+		resp, err := http.DefaultClient.Do(outReq)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		defer func() { _ = resp.Body.Close() }()
+		w.WriteHeader(resp.StatusCode)
+	}))
+	t.Cleanup(s.proxy.Close)
+	pu, _ := url.Parse(s.proxy.URL)
+	s.env.Conn.OnPremiseProxyHost = pu.Hostname()
+	s.env.Conn.OnPremiseProxyPort = pu.Port()
+
+	svc, err := btp.NewService(s.env, btp.WithOnPremiseTimeout(50*time.Millisecond))
+	then.AssertThat(t, err, is.Nil())
+
+	_, err = svc.CallOnPremise(context.Background(), "D", http.MethodGet, "/x", nil, nil)
+	then.AssertThat(t, err, is.Not(is.Nil()))
+	// The timeout bubbles up as a net/http client-side deadline error —
+	// we just assert that it looks timeout-shaped, not the exact text.
+	then.AssertThat(t,
+		strings.Contains(err.Error(), "deadline") ||
+			strings.Contains(err.Error(), "Client.Timeout") ||
+			strings.Contains(err.Error(), "timeout"),
+		is.True())
 }
 
 func Test_Service_ProxyHandler_Returns502OnLookupFail(t *testing.T) {
