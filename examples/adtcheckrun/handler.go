@@ -95,6 +95,10 @@ func Register(api *gin.RouterGroup, svc btp.OnPremMutator) {
 //  4. Read the SAP XML response and decode into CheckRunReports.
 //  5. Translate to the JSON-shaped Response and return.
 func Handler(svc btp.OnPremMutator) gin.HandlerFunc {
+	// FORK: "HF_S4" is the name of Hochfrequenz's on-prem destination.
+	// Change it to the destination name you configured in your BTP
+	// subaccount. The SAP path /sap/bc/adt/checkruns is standard
+	// across any ADT-enabled S/4 system and rarely needs changing.
 	const (
 		destinationName = "HF_S4"
 		sapPath         = "/sap/bc/adt/checkruns"

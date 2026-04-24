@@ -417,7 +417,7 @@ If you do hit a wall, [How it works under the hood](#how-it-works-under-the-hood
 
 - **Your Destination uses Principal Propagation, not Basic Auth.** The approuter-forwarded user JWT is stashed in the request context under `btp.ForwardedUserTokenKey{}`; implement a `DestinationAuthenticator` that reads it and sets `SAP-Connectivity-Authentication`. See "Extension points" below.
 - **Your on-prem endpoint needs CSRF tokens for writes** (most ADT writes do). Use `svc.CallOnPremiseMutating` — it runs the `X-CSRF-Token: Fetch` → attach-token-and-cookies → retry-once-on-403 dance transparently. See [Calling SAP with a POST — the CSRF case](#calling-sap-with-a-post--the-csrf-case) below.
-- **`/api/sap/...` returns 502 or an unexpected 401.** See the failure-mode ladder under "Smoke tests" below.
+- **One of the demo endpoints (`/api/adt-discovery`, `/api/adt-checkrun`) returns 502 or an unexpected 401.** See the failure-mode ladder under "Smoke tests" below.
 
 ## Deployment
 
@@ -595,7 +595,7 @@ BTP cockpit → subaccount → Connectivity → **Destinations** → New Destina
 
 | Field | Value |
 | --- | --- |
-| **Name** | `HfSap` (whatever you plan to reference in `/api/sap/<name>/…`) |
+| **Name** | `HfSap` (the destination name your handlers hard-code — e.g. `adtdiscovery` and `adtcheckrun` reference `HF_S4` — plus anything a fork adds) |
 | **Type** | `HTTP` |
 | **URL** | virtual host as exposed by the Cloud Connector (e.g. `http://hfsap.cc:8000`) |
 | **Proxy Type** | `OnPremise` |
@@ -603,7 +603,7 @@ BTP cockpit → subaccount → Connectivity → **Destinations** → New Destina
 | **User / Password** | the SAP account on the on-prem system |
 | **Additional Properties** (optional) | `CloudConnectorLocationId` = `<your location ID>` if you have multiple CCs |
 
-Once this exists, `https://<approuter-host>.<domain>/api/sap/HfSap/<path>` will work. Until it does, `/api/sap/HfSap/...` returns 502 from the Go backend.
+Once this exists (and a handler that references it by name is wired in `buildRouter` — `adtdiscovery` / `adtcheckrun` reference `HF_S4`), calls through that handler will work. Until the destination exists, the handler returns a typed `upstream_unreachable` 502 envelope.
 
 </details>
 
@@ -638,20 +638,20 @@ A `401 invalid token: ... invalid audience` here points at section 7 of this dep
 </details>
 
 <details>
-<summary>6c. <code>/api/sap/&lt;destination&gt;/sap/bc/adt/discovery</code> — full three-leg call to on-prem SAP</summary>
+<summary>6c. <code>/api/adt-discovery</code> — full three-leg call to on-prem SAP</summary>
 
-Simplest: open the URL in the same browser you used for 6b — the approuter session cookie is already set, and the browser will offer the XML body as a download. A 23 KB `*.xml` download is the success signal.
+Simplest: open the URL in the same browser you used for 6b — the approuter session cookie is already set, and the browser will render the JSON response. A compact `{"workspaces":[…]}` payload is the success signal.
 
 If you want `curl` instead, export the approuter session cookie from your browser (DevTools → Application → Cookies → copy `JSESSIONID`, or use a "cookies.txt" browser extension) and pass it via `-b`:
 
 ```sh
 curl -L -b "JSESSIONID=<value-from-devtools>" \
-  https://<approuter-host>.<domain>/api/sap/<destination-name>/sap/bc/adt/discovery
+  https://<approuter-host>.<domain>/api/adt-discovery
 ```
 
-Expected: `200 application/atomsvc+xml` with a body starting `<?xml version="1.0" ... <app:service ...>`. That one call exercises the destination-service lookup, both XSUAA `client_credentials` fetches, the Cloud Connector proxy tunnel, and Basic Auth against the on-premise SAP system — in the three-leg sequence described in the architecture diagram at the bottom of this README.
+Expected: `200 application/json` with a body starting `{"workspaces":[…]}`. That one call exercises the destination-service lookup, both XSUAA `client_credentials` fetches, the Cloud Connector proxy tunnel, and Basic Auth against the on-premise SAP system — in the three-leg sequence described in the architecture diagram at the bottom of this README. Internally, the handler fetches `/sap/bc/adt/discovery` from the destination (returned as XML), parses the ATOM service document, and emits the typed JSON view.
 
-Why `/sap/bc/adt/discovery` as the probe: it's a standard ABAP Development Tools endpoint (used by [`Hochfrequenz/adtler`](https://github.com/Hochfrequenz/adtler) as the CSRF-preflight target), available on any ADT-enabled S/4 system, and reachable by any authenticated ADT developer user — so it rarely trips on fine-grained authorization. If your destination points at a non-S/4 system (for example a HANA XS-only host), substitute an endpoint your destination user has read access to.
+Why `/sap/bc/adt/discovery` as the probe: it's a standard ABAP Development Tools endpoint (used by [`Hochfrequenz/adtler`](https://github.com/Hochfrequenz/adtler) as the CSRF-preflight target), available on any ADT-enabled S/4 system, and reachable by any authenticated ADT developer user — so it rarely trips on fine-grained authorization. If your destination points at a non-S/4 system (for example a HANA XS-only host), change the hard-coded path in `examples/adtdiscovery/handler.go` to something your destination user has read access to.
 
 </details>
 
@@ -776,7 +776,7 @@ sequenceDiagram
     participant CC as Cloud<br/>Connector
     participant SAP as On-premise<br/>SAP system
 
-    Browser->>AR: GET /api/sap/<destination>/...
+    Browser->>AR: GET /api/adt-discovery (or other typed route)
     AR->>XSUAA: OAuth auth-code flow (first time only)
     XSUAA-->>AR: session + JWT
     AR->>Go: forward request with Authorization: Bearer <jwt>

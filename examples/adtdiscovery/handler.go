@@ -4,10 +4,11 @@
 // view of the ATOM service document the SAP side emits.
 //
 // Why this handler ships wired into cmd/server/main.go's router
-// (unlike invoicesync / adtcheckrun which are pure-reference
-// examples): the showcase deploy needs a safe read-path endpoint
-// that demonstrates the three-leg dance end-to-end. Discovery is
-// ideal because it:
+// (together with adtcheckrun for the POST side; invoicesync stays
+// a pure-reference example because it targets a Z-endpoint that
+// isn't guaranteed to exist on any given S/4): the showcase deploy
+// needs a safe read-path endpoint that demonstrates the three-leg
+// dance end-to-end. Discovery is ideal because it:
 //
 //   - Requires only ADT-developer authority on the SAP side
 //     (anything broader would be a privilege surface).
@@ -73,6 +74,10 @@ func Register(api *gin.RouterGroup, svc btp.OnPremCaller) {
 // is a prerequisite for the three-leg call to be considered
 // working at all.
 func Handler(svc btp.OnPremCaller) gin.HandlerFunc {
+	// FORK: "HF_S4" is the name of Hochfrequenz's on-prem destination.
+	// Change it to the destination name you configured in your BTP
+	// subaccount. The SAP path /sap/bc/adt/discovery is standard
+	// across any ADT-enabled S/4 system and rarely needs changing.
 	const (
 		destinationName = "HF_S4"
 		sapPath         = "/sap/bc/adt/discovery"
