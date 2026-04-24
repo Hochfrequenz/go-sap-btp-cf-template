@@ -1,0 +1,168 @@
+name: Template guards
+
+# These gates exist because this repo is a template — every fork clones
+# the current state, and a drift between the apply-config rewriter and
+# the tree leaves downstream users with a half-renamed repo on first
+# `go run ./cmd/apply-config`.
+#
+# Two guards:
+#   1. apply-config smoke — copy the repo, run apply-config against a
+#      fixture config.yml, then `go build ./... && go test ./...` in the
+#      rewritten tree. Breaks if any rewriter stops matching its target.
+#   2. magic-string gate — grep the tree for the template's module path
+#      and `./cmd/server` outside their allow-listed homes. A new
+#      hard-coded reference that the rewriter doesn't know about fails
+#      CI, forcing the contributor to either extend the rewriter or
+#      opt-out of the gate explicitly.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+
+  apply_config_smoke:
+    name: apply-config smoke (fixture rewrite + build + test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: 1.26.x
+
+      - name: Copy repo to a scratch dir and inject a fresh config.yml
+        run: |
+          set -euxo pipefail
+          WORK="$RUNNER_TEMP/apply-config-smoke"
+          mkdir -p "$WORK"
+          # rsync-style copy that skips the .git dir — the rewriter
+          # must cope without git metadata.
+          tar --exclude=.git -cf - . | tar -xf - -C "$WORK"
+          cat > "$WORK/config.yml" <<'YAML'
+          app:
+            name: smoke-test-app
+            module: github.com/example/smoke-test
+          services:
+            xsuaa:        smoke-xsuaa
+            destination:  smoke-dest
+            connectivity: smoke-cc
+          cf:
+            api:    https://api.cf.example-region.example.com
+            org:    Example Org
+            space:  smoke
+            domain: cfapps.example-region.example.com
+          YAML
+          echo "WORK=$WORK" >> "$GITHUB_ENV"
+
+      - name: Run apply-config against the scratch tree
+        working-directory: ${{ env.WORK }}
+        run: |
+          set -euxo pipefail
+          # Go needs to resolve the rewriter source relative to WORK,
+          # which already includes cmd/apply-config. No --root needed.
+          go run ./cmd/apply-config
+          # Idempotency check: a second run must be a no-op.
+          go run ./cmd/apply-config --check
+
+      - name: Build + test the rewritten tree
+        working-directory: ${{ env.WORK }}
+        run: |
+          set -euxo pipefail
+          go build ./...
+          go test ./...
+
+      - name: Confirm the rewriter actually rewrote things
+        working-directory: ${{ env.WORK }}
+        run: |
+          set -euxo pipefail
+          # go.mod must carry the new module path.
+          grep -q '^module github.com/example/smoke-test$' go.mod
+          # manifest.yml must carry the new service names.
+          grep -q -- '- smoke-xsuaa' manifest.yml
+          grep -q -- '- smoke-dest'  manifest.yml
+          grep -q -- '- smoke-cc'    manifest.yml
+          # xs-security.json must carry the new xsappname.
+          grep -q '"xsappname": "smoke-test-app"' xs-security.json
+          # The old module path must NOT appear in any Go source in the
+          # rewritten tree (outside cmd/apply-config which holds the
+          # rewriter's internals and legitimately carries the original
+          # module path as a test fixture).
+          if grep -rn --include='*.go' --exclude-dir=cmd/apply-config \
+              'github.com/hochfrequenz/go-sap-btp-cloud-foundry-mwe' .; then
+            echo "::error::stale module path survived apply-config" >&2
+            exit 1
+          fi
+
+  magic_string_gate:
+    name: magic-string gate (module path + ./cmd/server)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install ripgrep
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+
+      - name: Module path must only appear in rewriter-known files
+        run: |
+          set -euo pipefail
+          # Allow-listed locations. Anywhere else, the grep fails the gate:
+          #   - go.mod / go.sum           : rewriter handles these.
+          #   - *.go                      : rewriter handles Go imports.
+          #   - cmd/apply-config/         : rewriter source; holds the
+          #                                 literal as the "from" value.
+          #   - config.yml                : source of truth read by the
+          #                                 rewriter (not output).
+          #   - README.md / docs/         : prose about this template.
+          #   - template-guards.yml       : this very workflow; quotes
+          #                                 the literal in its rg call.
+          #
+          # Note: --no-ignore-vcs disables .gitignore-driven skipping so
+          # .github/ and other dotfiles are scanned; we re-exclude
+          # vendor / node_modules explicitly below.
+          if rg -n --hidden --no-ignore-vcs \
+              --glob '!go.mod' --glob '!go.sum' \
+              --glob '!*.go' \
+              --glob '!cmd/apply-config/**' \
+              --glob '!config.yml' \
+              --glob '!README.md' --glob '!docs/**' \
+              --glob '!.github/workflows/template-guards.yml' \
+              --glob '!.git/**' \
+              --glob '!vendor/**' --glob '!node_modules/**' \
+              'github\.com/hochfrequenz/go-sap-btp-cloud-foundry-mwe' .; then
+            echo "::error::The template module path appeared outside the allow-listed files above." >&2
+            echo "::error::Either add it to cmd/apply-config so apply-config rewrites the new file, or expand the allow-list in .github/workflows/template-guards.yml." >&2
+            exit 1
+          fi
+
+      - name: Hard-coded ./cmd/server must only appear in the known set
+        run: |
+          set -euo pipefail
+          # Allow-listed locations for the literal './cmd/server':
+          #   - manifest.yml            : declares the launch binary
+          #   - Procfile                : same fallback
+          #   - Makefile                : build recipe
+          #   - scripts/                : build recipe
+          #   - .github/workflows/      : CD step builds it
+          #   - README.md               : walkthrough + escape-hatch docs
+          #   - docs/                   : walkthrough prose
+          #   - cmd/apply-config/       : mentioned in rewriter comments
+          if rg -n --hidden --no-ignore-vcs \
+              --glob '!manifest.yml' \
+              --glob '!Procfile' \
+              --glob '!Makefile' \
+              --glob '!scripts/**' \
+              --glob '!.github/workflows/**' \
+              --glob '!README.md' --glob '!docs/**' \
+              --glob '!cmd/apply-config/**' \
+              --glob '!.git/**' \
+              --glob '!vendor/**' --glob '!node_modules/**' \
+              '\./cmd/server' .; then
+            echo "::error::Hard-coded './cmd/server' appeared outside the allow-listed files above." >&2
+            echo "::error::Rename it to reference \$APP_NAME (or similar), or expand the allow-list in .github/workflows/template-guards.yml." >&2
+            exit 1
+          fi
