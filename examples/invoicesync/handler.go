@@ -19,6 +19,7 @@ package invoicesync
 import (
 	"bytes"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -55,31 +56,27 @@ func Handler(svc *btp.Service) gin.HandlerFunc {
 	const destinationName = "HF_S4"
 
 	return func(c *gin.Context) {
-		// 2. Bind + validate the request body.
+		// Bind + validate the request body. Struct tags do the heavy
+		// lifting; a bad payload fails here with a 400 and never
+		// reaches the SAP system.
 		var req Request
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
 
-		// 3. (Optional) who is the caller? Claims are already
-		//    signature- and audience-validated by the middleware.
-		//    user_name is the canonical XSUAA user claim.
+		// Claims — read the authenticated user for the audit log.
+		// The middleware has already signature- and audience-validated
+		// the JWT; `user_name` is the canonical XSUAA user claim.
 		claims := c.MustGet("jwtClaims").(jwt.MapClaims)
-		_ = claims["user_name"]
+		userName, _ := claims["user_name"].(string)
+		slog.InfoContext(c.Request.Context(), "invoice-sync requested",
+			"user", userName, "company_code", req.CompanyCode)
 
-		// Marshal the validated request into whatever shape the ABAP
-		// endpoint expects. A real service keeps this lossy conversion
-		// in one place, not inline in the handler.
-		body, err := json.Marshal(toABAPPayload(req))
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "marshal: " + err.Error()})
-			return
-		}
-
-		// 4. One call runs XSUAA client_credentials → Destination
-		//    lookup → Connectivity client_credentials → Cloud
-		//    Connector tunnel → Basic Auth against SAP.
+		// Call — one function runs XSUAA client_credentials →
+		// Destination lookup → Connectivity client_credentials →
+		// Cloud Connector tunnel → Basic Auth against SAP.
+		body, _ := json.Marshal(toABAPPayload(req)) // typed struct → cannot fail
 		headers := http.Header{"Content-Type": []string{"application/json"}}
 		resp, err := svc.CallOnPremise(
 			c.Request.Context(),
@@ -95,25 +92,37 @@ func Handler(svc *btp.Service) gin.HandlerFunc {
 		}
 		defer func() { _ = resp.Body.Close() }()
 
-		// 5. Stream the on-prem response through verbatim.
-		//    resp.ContentLength can be -1 for chunked responses;
-		//    DataFromReader falls back to streaming without a
-		//    Content-Length header in that case.
+		// Shape — stream the on-prem response through verbatim.
+		// resp.ContentLength can be -1 for chunked responses;
+		// DataFromReader falls back to streaming without a
+		// Content-Length header in that case.
 		c.DataFromReader(resp.StatusCode, resp.ContentLength,
 			resp.Header.Get("Content-Type"), resp.Body, nil)
 	}
 }
 
+// abapPayload is the typed view of what the on-prem ABAP endpoint
+// expects. Keeping this as a named struct (rather than map[string]any)
+// makes the outbound shape as visible and compiler-checked as the
+// inbound Request — matching the README's "type everything" rule.
+type abapPayload struct {
+	CompanyCode string `json:"BUKRS"`
+	PostingDate string `json:"BUDAT"`
+	AmountCents int64  `json:"AMOUNT"`
+	Currency    string `json:"WAERS"`
+	Reference   string `json:"XBLNR"`
+}
+
 // toABAPPayload converts the validated Gin-side request into the shape
-// the ABAP endpoint expects. Field-name mapping (BUKRS for company
-// code, WAERS for currency, etc.) lives here so handler code stays
-// readable and the translation has exactly one home.
-func toABAPPayload(r Request) any {
-	return map[string]any{
-		"BUKRS":  r.CompanyCode,
-		"BUDAT":  r.PostingDate.Format("2006-01-02"),
-		"AMOUNT": r.AmountCents,
-		"WAERS":  r.Currency,
-		"XBLNR":  r.Reference,
+// the ABAP endpoint expects. The translation (BUKRS for company code,
+// WAERS for currency, etc.) has exactly one home, so handler code
+// stays readable.
+func toABAPPayload(r Request) abapPayload {
+	return abapPayload{
+		CompanyCode: r.CompanyCode,
+		PostingDate: r.PostingDate.Format("2006-01-02"),
+		AmountCents: r.AmountCents,
+		Currency:    r.Currency,
+		Reference:   r.Reference,
 	}
 }

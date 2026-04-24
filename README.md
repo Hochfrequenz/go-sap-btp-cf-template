@@ -315,7 +315,7 @@ domain: cfapps.eu10.hana.ondemand.com
 Even after a green `cf push`, three things still need to be done by a human in the BTP cockpit before requests succeed. Each is a one-time chore per deploy — expand the step you're on:
 
 <details>
-<summary><b>5a. Update XSUAA redirect URIs</b> — makes OAuth login not bounce with "redirect URI mismatch"</summary>
+<summary>5a. Update XSUAA redirect URIs — makes OAuth login not bounce with "redirect URI mismatch"</summary>
 
 The shipped `xs-security.json` has an empty `redirect-uris` array — we cannot know the approuter's URL until the first push. After deploy:
 
@@ -329,7 +329,7 @@ Skipping this yields "redirect URI mismatch" on the first OAuth login.
 </details>
 
 <details>
-<summary><b>5b. Create a Role Collection and assign it to yourself</b> — only matters once you add a scope-gated route</summary>
+<summary>5b. Create a Role Collection and assign it to yourself — only matters once you add a scope-gated route</summary>
 
 `xs-security.json` defines a `User` role template. XSUAA issues tokens without scopes until a Role Collection containing that role is assigned to your BTP user.
 
@@ -343,7 +343,7 @@ The `/api/*` routes this MWE ships with do **not** enforce the `User` scope — 
 </details>
 
 <details>
-<summary><b>5c. Create a Destination pointing at your on-prem system</b> — this is what <code>svc.CallOnPremise</code> resolves through</summary>
+<summary>5c. Create a Destination pointing at your on-prem system — this is what <code>svc.CallOnPremise</code> resolves through</summary>
 
 BTP cockpit → subaccount → Connectivity → **Destinations** → New Destination:
 
@@ -366,7 +366,7 @@ Once this exists, `https://<approuter-host>.<domain>/api/sap/HfSap/<path>` will 
 Three layered checks, running in order. If one fails, the earlier ones still isolate where in the chain things broke. Substitute `<approuter-host>` and `<domain>` for your deploy — typically `go-btp-mwe-web` and e.g. `cfapps.eu10.hana.ondemand.com`.
 
 <details>
-<summary><b>6a. <code>/healthz</code></b> — approuter reaches the Go backend (no auth)</summary>
+<summary>6a. <code>/healthz</code> — approuter reaches the Go backend (no auth)</summary>
 
 ```sh
 curl -i https://<approuter-host>.<domain>/healthz
@@ -377,7 +377,7 @@ Expected: `HTTP/1.1 200 OK` with body `ok`. `/healthz` is explicitly marked `aut
 </details>
 
 <details>
-<summary><b>6b. <code>/api/me</code></b> — full OAuth + JWT-validation chain (needs a browser)</summary>
+<summary>6b. <code>/api/me</code> — full OAuth + JWT-validation chain (needs a browser)</summary>
 
 Open in a browser — `curl` alone cannot complete the XSUAA SSO dance. Use whatever your OS opens HTTPS URLs with (`open` on macOS, `start` on Windows cmd, `xdg-open` on Linux), or paste the URL:
 
@@ -392,7 +392,7 @@ A `401 invalid token: ... invalid audience` here points at section 7 of this dep
 </details>
 
 <details>
-<summary><b>6c. <code>/api/sap/&lt;destination&gt;/sap/bc/adt/discovery</code></b> — full three-leg call to on-prem SAP</summary>
+<summary>6c. <code>/api/sap/&lt;destination&gt;/sap/bc/adt/discovery</code> — full three-leg call to on-prem SAP</summary>
 
 Simplest: open the URL in the same browser you used for 6b — the approuter session cookie is already set, and the browser will offer the XML body as a download. A 23 KB `*.xml` download is the success signal.
 
@@ -410,7 +410,7 @@ Why `/sap/bc/adt/discovery` as the probe: it's a standard ABAP Development Tools
 </details>
 
 <details>
-<summary><b>Failure-mode ladder</b> — what each error code usually means, in order of "more annoying to diagnose"</summary>
+<summary>Failure-mode ladder — what each error code usually means, in order of "more annoying to diagnose"</summary>
 
 - `404` from the approuter: the backend isn't bound to the destination `GoBackend` that `web/xs-app.json` references, or the backend crashed. `cf logs <backend-host> --recent`.
 - `401 invalid audience` or `... invalid issuer`: section 7. The JWT middleware expects a token shape XSUAA does not emit. Fix is in `internal/btp/auth.go`.
@@ -462,7 +462,7 @@ CI enforces 90% line coverage (`.github/workflows/coverage.yml`).
 If you need to exercise Gin handlers against real (stub) BTP services locally, set the env explicitly — the required shape matches `internal/btp/env.go` struct tags.
 
 <details>
-<summary><b>VCAP env stub</b> — expand to copy</summary>
+<summary>VCAP env stub — expand to copy</summary>
 
 ```sh
 export VCAP_APPLICATION='{"application_id":"x","application_name":"go-btp-mwe","space_name":"dev","uris":["localhost"]}'
