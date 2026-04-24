@@ -19,6 +19,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/hochfrequenz/go-sap-btp-cf-template/examples/adtcheckrun"
+	"github.com/hochfrequenz/go-sap-btp-cf-template/examples/adtdiscovery"
 	"github.com/hochfrequenz/go-sap-btp-cf-template/internal/btp"
 )
 
@@ -47,7 +49,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	r := buildRouter(validator, svc, svc.ProxyHandler, logger)
+	r := buildRouter(validator, svc, svc, logger)
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -118,24 +120,21 @@ func logLevelFromEnv() slog.Level {
 }
 
 // buildRouter wires the Gin router from its abstract dependencies —
-// NOT from *btp.Service directly. Depending on the narrower
-// btp.OnPremCaller (reads) interface means handlers added here are
-// testable with a one-method fake (see examples/invoicesync) and
-// decouples the router from any internal btp refactor.
+// NOT from *btp.Service directly. Handlers added here are testable
+// with a one-method fake (see examples/*_test.go) and decoupled from
+// any internal btp refactor.
 //
-// proxyHandler is passed as a pre-bound gin.HandlerFunc rather than
-// a *btp.Service so this function does not need to know about the
-// concrete ProxyHandler method. In main, bind it at the construction
-// seam: `buildRouter(validator, svc, svc.ProxyHandler, logger)`.
-//
-// The `caller` parameter is the reach-in point forks add their own
-// handlers on — the invoicesync example is wired below (commented
-// out) to show the pattern.
-func buildRouter(validator *btp.JWTValidator, _ btp.OnPremCaller, proxyHandler gin.HandlerFunc, logger *slog.Logger) *gin.Engine {
-	// `caller` is unnamed (`_`) because the bare template has no handler
-	// that uses it yet. A fork adds its first handler by renaming `_` →
-	// `caller` and calling e.g. `invoicesync.Register(api, caller)` —
-	// a one-line change, not a signature change that ripples into main().
+// The set of routes below is the *constrained-proxy* pattern: every
+// endpoint has a fixed method, a fixed destination name, and a fixed
+// SAP path baked in at the registration site. That is deliberate —
+// strict typing at the Gin boundary requires a finite endpoint set.
+// A transparent `api.Any("/sap/:destination/*path", …)` route is
+// convenient but untyped by definition, and it turns the service
+// into a tunnel that carries the destination's technical-user
+// authority to any authenticated BTP caller. The template ships
+// without such a route; forks that genuinely need one should wire
+// `svc.ProxyHandler` themselves, gated behind `btp.RequireScope`.
+func buildRouter(validator *btp.JWTValidator, caller btp.OnPremCaller, mutator btp.OnPremMutator, logger *slog.Logger) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
 	// The backend app is directly reachable on its .cfapps.* route, not
@@ -157,15 +156,18 @@ func buildRouter(validator *btp.JWTValidator, _ btp.OnPremCaller, proxyHandler g
 		claims, _ := c.Get("jwtClaims")
 		c.JSON(http.StatusOK, gin.H{"claims": claims})
 	})
-	// Transparent pass-through to a BTP destination.
-	// GET / POST / PUT / DELETE / PATCH /api/sap/<destinationName>/<path...>.
-	api.Any("/sap/:destination/*path", proxyHandler)
-
-	// Forks: register your own handlers here, using `caller` for reads
-	// and, once CallOnPremiseMutating is available, the matching
-	// mutator for writes. The invoicesync example pattern is:
-	//
-	//	invoicesync.Register(api, caller)
+	// Two constrained-proxy demos. Both are fully typed (JSON in,
+	// JSON out) — SAP's XML is consumed + parsed inside the handler,
+	// never emitted at the client boundary:
+	//   GET  /api/adt-discovery  → list ADT workspaces + collections.
+	//   POST /api/adt-checkrun   → run an ATC / syntax check for one
+	//                              ABAP object; goes through the
+	//                              CSRF handshake transparently.
+	// Replace or add your own handlers here. Both follow the same
+	// shape: destination name + SAP path hard-coded at Register
+	// time, validator tags on the request struct.
+	adtdiscovery.Register(api, caller)
+	adtcheckrun.Register(api, mutator)
 
 	return r
 }
