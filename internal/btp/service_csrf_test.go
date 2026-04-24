@@ -9,8 +9,10 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/corbym/gocrest/is"
 	"github.com/corbym/gocrest/then"
@@ -261,6 +263,68 @@ func Test_CallOnPremiseMutating_SurfacesRealForbidden(t *testing.T) {
 	// Single fetch, single mutating attempt — NO retry, NO re-fetch.
 	then.AssertThat(t, int(sap.fetchHits.Load()), is.EqualTo(1))
 	then.AssertThat(t, int(sap.mutatingHits.Load()), is.EqualTo(1))
+}
+
+// Test_CallOnPremiseMutating_SingleflightDedupesConcurrentFetches
+// pins the concurrency contract: N goroutines hitting a cold cache
+// for the same destination trigger exactly ONE fetch, not N. This is
+// the whole reason csrfStateFor uses singleflight — without it, a
+// burst of incoming POSTs would hammer the SAP ICF with redundant
+// discovery requests on every cold start.
+func Test_CallOnPremiseMutating_SingleflightDedupesConcurrentFetches(t *testing.T) {
+	sap := newCSRFSAPServer("/sap/bc/adt/discovery", "tok-1")
+	// Slow down the fetch so the race window is real — 20 ms is
+	// plenty for the goroutines below to all reach csrfStateFor
+	// before the first one's fetch returns.
+	sap.server.Close()
+	sap.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/sap/bc/adt/discovery" {
+			if r.Header.Get("X-CSRF-Token") != "Fetch" {
+				http.Error(w, "fetch requires X-CSRF-Token: Fetch", http.StatusBadRequest)
+				return
+			}
+			sap.fetchHits.Add(1)
+			time.Sleep(20 * time.Millisecond)
+			w.Header().Set("X-CSRF-Token", "tok-1")
+			w.Header().Add("Set-Cookie", "SAP_SESSIONID_ABC_100=abc123; path=/")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		sap.mutatingHits.Add(1)
+		if r.Header.Get("X-CSRF-Token") == "tok-1" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.Header().Set("X-CSRF-Token", "Required")
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer sap.Close()
+
+	s := newBTPStackRoutedThrough(t, sap.server.URL)
+	svc, err := btp.NewService(s.env)
+	then.AssertThat(t, err, is.Nil())
+
+	const N = 8
+	var wg sync.WaitGroup
+	wg.Add(N)
+	for i := 0; i < N; i++ {
+		go func() {
+			defer wg.Done()
+			resp, err := svc.CallOnPremiseMutating(context.Background(), "D",
+				http.MethodPost, "/sap/bc/adt/activation", nil,
+				bytes.NewReader([]byte(`<x/>`)))
+			then.AssertThat(t, err, is.Nil())
+			if resp != nil {
+				_ = resp.Body.Close()
+			}
+		}()
+	}
+	wg.Wait()
+
+	// One fetch total — singleflight collapsed the N-way race.
+	// N mutating calls all succeeded.
+	then.AssertThat(t, int(sap.fetchHits.Load()), is.EqualTo(1))
+	then.AssertThat(t, int(sap.mutatingHits.Load()), is.EqualTo(N))
 }
 
 // Test_CallOnPremiseMutating_CustomFetchPath pins WithCSRFFetchPath:

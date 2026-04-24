@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"golang.org/x/sync/singleflight"
 )
 
 // OnPremCaller is the single-method contract Gin handlers should depend
@@ -66,11 +67,14 @@ type Service struct {
 	// CSRF handshake state — see CallOnPremiseMutating for the dance.
 	// csrfFetchPath is the GET path used to retrieve a fresh token.
 	// csrfStates caches token + SAP session cookies keyed by
-	// destination name; csrfMu serialises the fetch/invalidate
-	// paths across goroutines.
+	// destination name; csrfMu guards only the cache read/write.
+	// csrfGroup dedupes concurrent fetches for the same destination
+	// so N goroutines racing into a cold cache produce ONE SAP
+	// round-trip, not N.
 	csrfFetchPath string
 	csrfMu        sync.Mutex
 	csrfStates    map[string]*csrfState
+	csrfGroup     singleflight.Group
 }
 
 // csrfState holds one destination's cached X-CSRF-Token and the SAP
@@ -349,16 +353,51 @@ func (s *Service) callMutatingOnce(ctx context.Context, destName, method, pathSu
 }
 
 // csrfStateFor returns the cached CSRF state for destName, fetching
-// it if absent. The exclusive lock around the fetch serialises
-// concurrent first-misses per Service — simpler than a sync.Once /
-// singleflight, and the cost (one in-flight fetch blocks callers for
-// the same destination) only hits on cold start and on 403-retries.
+// it if absent. Concurrent first-misses for the same destination are
+// deduped through singleflight — N goroutines racing into a cold
+// cache trigger exactly ONE SAP round-trip, all N see the same state.
+// The short mutex sections only guard the in-memory map; we never
+// hold them across the network call.
 func (s *Service) csrfStateFor(ctx context.Context, destName string) (*csrfState, error) {
+	// Fast path: cached.
 	s.csrfMu.Lock()
-	defer s.csrfMu.Unlock()
-	if state, ok := s.csrfStates[destName]; ok {
+	state, ok := s.csrfStates[destName]
+	s.csrfMu.Unlock()
+	if ok {
 		return state, nil
 	}
+	// Slow path: singleflight-dedupe the fetch.
+	v, err, _ := s.csrfGroup.Do(destName, func() (any, error) {
+		// Another goroutine's Do() may have populated the cache by
+		// the time this callback runs — re-check.
+		s.csrfMu.Lock()
+		if existing, ok := s.csrfStates[destName]; ok {
+			s.csrfMu.Unlock()
+			return existing, nil
+		}
+		s.csrfMu.Unlock()
+
+		fetched, err := s.fetchCSRF(ctx, destName)
+		if err != nil {
+			return nil, err
+		}
+		s.csrfMu.Lock()
+		s.csrfStates[destName] = fetched
+		s.csrfMu.Unlock()
+		return fetched, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return v.(*csrfState), nil
+}
+
+// fetchCSRF performs the X-CSRF-Token: Fetch handshake against the
+// configured fetch path. Separated out so csrfStateFor's singleflight
+// callback can run it without holding the state mutex — if the mutex
+// wrapped the network call, a slow SAP would block cache reads for
+// OTHER destinations too.
+func (s *Service) fetchCSRF(ctx context.Context, destName string) (*csrfState, error) {
 	// Accept: */* matters — some SAP ICF nodes return 400 without it
 	// on the Fetch handshake. We do not read the body anyway (the
 	// token travels in the response header), so widest-possible Accept
@@ -381,9 +420,7 @@ func (s *Service) csrfStateFor(ctx context.Context, destName string) (*csrfState
 	if token == "" {
 		return nil, fmt.Errorf("csrf fetch %s returned empty X-CSRF-Token header", s.csrfFetchPath)
 	}
-	state := &csrfState{token: token, cookies: resp.Cookies()}
-	s.csrfStates[destName] = state
-	return state, nil
+	return &csrfState{token: token, cookies: resp.Cookies()}, nil
 }
 
 // invalidateCSRF drops the cached token + cookies for destName. Called
