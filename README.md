@@ -13,6 +13,19 @@ A minimal working example of a Go webservice that:
 > - Deploying for the first time → [Deployment](#deployment).
 > - Wondering what the three-leg dance actually looks like on the wire → [How it works under the hood](#how-it-works-under-the-hood).
 
+## Table of contents
+
+1. [Repository layout](#repository-layout)
+2. [Using this repo as a template](#using-this-repo-as-a-template)
+3. [Adding your service — the 80 % case](#adding-your-service--the-80--case)
+4. [Deployment](#deployment)
+5. [Continuous deployment](#continuous-deployment)
+6. [Local development](#local-development)
+7. [Extension points](#extension-points)
+8. [What this MWE deliberately does *not* do](#what-this-mwe-deliberately-does-not-do)
+9. [How it works under the hood](#how-it-works-under-the-hood)
+10. [References](#references)
+
 ## Repository layout
 
 ```
