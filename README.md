@@ -82,9 +82,9 @@ Building a new value-adding service on top of on-prem SAP is **two anchors**: an
 ```mermaid
 flowchart LR
     User([BTP user]) --> AR[Approuter]
-    AR --> Go[<b>Anchor 2: Go</b><br/>your Gin handler in<br/><code>cmd/server/main.go</code>]
-    Go -->|svc.CallOnPremise| BTP[BTP plumbing<br/><i>already wired</i><br/>XSUAA · Destination · CC]
-    BTP -->|HTTPS + Basic Auth| SAP[<b>Anchor 1: SAP</b><br/>your ABAP endpoint<br/><code>/sap/bc/rest/zmy_service</code>]
+    AR --> Go["<b>Anchor 2: Go</b><br/>your Gin handler in<br/><code>cmd/server/main.go</code>"]
+    Go -->|svc.CallOnPremise| BTP["BTP plumbing<br/><i>already wired</i><br/>XSUAA · Destination · CC"]
+    BTP -->|HTTPS + Basic Auth| SAP["<b>Anchor 1: SAP</b><br/>your ABAP endpoint<br/><code>/sap/bc/rest/zmy_service</code>"]
 
     style Go fill:#d1e7dd,stroke:#0f5132,stroke-width:2px,color:#0f5132
     style SAP fill:#fff3cd,stroke:#664d03,stroke-width:2px,color:#664d03
