@@ -47,7 +47,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	r := buildRouter(validator, svc, logger)
+	r := buildRouter(validator, svc, svc.ProxyHandler, logger)
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -117,7 +117,25 @@ func logLevelFromEnv() slog.Level {
 	}
 }
 
-func buildRouter(validator *btp.JWTValidator, svc *btp.Service, logger *slog.Logger) *gin.Engine {
+// buildRouter wires the Gin router from its abstract dependencies —
+// NOT from *btp.Service directly. Depending on the narrower
+// btp.OnPremCaller (reads) interface means handlers added here are
+// testable with a one-method fake (see examples/invoicesync) and
+// decouples the router from any internal btp refactor.
+//
+// proxyHandler is passed as a pre-bound gin.HandlerFunc rather than
+// a *btp.Service so this function does not need to know about the
+// concrete ProxyHandler method. In main, bind it at the construction
+// seam: `buildRouter(validator, svc, svc.ProxyHandler, logger)`.
+//
+// The `caller` parameter is the reach-in point forks add their own
+// handlers on — the invoicesync example is wired below (commented
+// out) to show the pattern.
+func buildRouter(validator *btp.JWTValidator, _ btp.OnPremCaller, proxyHandler gin.HandlerFunc, logger *slog.Logger) *gin.Engine {
+	// `caller` is unnamed (`_`) because the bare template has no handler
+	// that uses it yet. A fork adds its first handler by renaming `_` →
+	// `caller` and calling e.g. `invoicesync.Register(api, caller)` —
+	// a one-line change, not a signature change that ripples into main().
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
 	// The backend app is directly reachable on its .cfapps.* route, not
@@ -140,8 +158,14 @@ func buildRouter(validator *btp.JWTValidator, svc *btp.Service, logger *slog.Log
 		c.JSON(http.StatusOK, gin.H{"claims": claims})
 	})
 	// Transparent pass-through to a BTP destination.
-	// GET /api/sap/<destinationName>/<path...>
-	api.Any("/sap/:destination/*path", svc.ProxyHandler)
+	// GET / POST / PUT / DELETE / PATCH /api/sap/<destinationName>/<path...>.
+	api.Any("/sap/:destination/*path", proxyHandler)
+
+	// Forks: register your own handlers here, using `caller` for reads
+	// and, once CallOnPremiseMutating is available, the matching
+	// mutator for writes. The invoicesync example pattern is:
+	//
+	//	invoicesync.Register(api, caller)
 
 	return r
 }

@@ -472,8 +472,9 @@ go build -tags cloudfoundry -o bin/server ./cmd/server
 cf push go-btp-mwe -f manifest.yml --vars-file vars.yml -b binary_buildpack -c './bin/server'
 ```
 
-Die `manifest.yml` zeigt weiterhin auf `go_buildpack` — d. h. der nächste blanke `cf push` scheitert wieder am Stager.
-Die saubere Variante (Manifest dauerhaft auf `binary_buildpack` umstellen + CI baut die Binary) ist als Follow-up in [Issue #10](https://github.com/Hochfrequenz/go-sap-btp-cloud-foundry-mwe/issues/10) dokumentiert.
+Die `manifest.yml` zeigte zum Zeitpunkt dieses Deploys weiterhin auf `go_buildpack` — d. h. der nächste blanke `cf push` wäre wieder am Stager gescheitert.
+
+> **Seither (PR [#32](https://github.com/Hochfrequenz/go-sap-btp-cloud-foundry-mwe/pull/32))** ist die `manifest.yml` dauerhaft auf `binary_buildpack` mit `command: ./bin/server` umgestellt; der Build läuft per `make build-linux` bzw. `scripts\build.ps1`, und die CD-Pipeline macht dasselbe. Ein blanker `cf push` funktioniert jetzt ohne `-b` / `-c`-Override — solange `./bin/server` vorher gebaut wurde.
 
 ---
 
@@ -504,3 +505,15 @@ Die folgenden Punkte sind bei einer Reproduktion auf einer leeren Windows-Entwic
 11. **XSUAA `iss` ist ein internes Literal.** Tokens tragen `iss = http://<zone>.localhost:8080/uaa/oauth/token`, nicht aus `VCAP_SERVICES` ableitbar. Entweder nicht prüfen (so der Code hier) oder explizit diesen Pattern hardcoden. `aud` ist `[..., sb-<xsappname>!t<tenant>]` — also `ClientID`, nicht `XSAppName`.
 12. **Claim-Formen lassen sich ohne Debug-Push ermitteln.** `cf env` liefert das XSUAA-Binding, ein `client_credentials`-Token-Request vom Entwickler-Rechner aus liefert einen JWT mit denselben `iss`/`aud`-Konventionen wie der User-Context-Token. Spart einen Redeploy auf Kosten von einmal "trust the pattern".
 13. **`/sap/public/info` eignet sich nicht als erste Destination-Probe.** Verlangt Admin-Rollen, liefert sonst `403`. `/sap/bc/adt/discovery` ist besser — reicht an ADT-Entwickler-Rechte aus und ist der Standard-CSRF-Preflight-Endpoint aus `adtler`.
+
+---
+
+## Seit dem ersten Deploy gelandete Follow-ups
+
+Dieses Walkthrough ist als chronologisches Protokoll bewusst nicht umgeschrieben worden, aber die folgenden Punkte aus der "Stolpersteine"-Liste sind in späteren PRs adressiert worden und gelten heute nicht mehr wie hier beschrieben:
+
+- **`go_buildpack` ist nicht mehr der Default** (PR [#32](https://github.com/Hochfrequenz/go-sap-btp-cloud-foundry-mwe/pull/32)) — `manifest.yml` verwendet `binary_buildpack` + `command: ./bin/server`; `make build-linux` / `scripts\build.ps1` bauen die Linux-Binary.
+- **CSRF / POST-Handshake ist eingebaut** (PR [#38](https://github.com/Hochfrequenz/go-sap-btp-cloud-foundry-mwe/pull/38)) — `svc.CallOnPremiseMutating` macht Fetch → Attach → Retry transparent; der transparente `/api/sap/:destination/*path`-Proxy routet POST / PUT / DELETE / PATCH automatisch durch. ADT-Beispiel: `examples/adtcheckrun/`.
+- **CD-Pipeline läuft** (`.github/workflows/deploy.yml`) — getriggert durch Release-Publishing, baut lokal, pusht, curlt `/healthz` als Smoke-Test.
+- **Typisierter API-Error-Envelope** (PR [#29](https://github.com/Hochfrequenz/go-sap-btp-cloud-foundry-mwe/pull/29)) — kein `err.Error()`-Leak mehr in Responses; `btp.AbortError` ist der einzige gesegnete Writer.
+- **RequestID + RequireScope-Middleware** (PR [#31](https://github.com/Hochfrequenz/go-sap-btp-cloud-foundry-mwe/pull/31)) — Access-Log ohne PII / Claims; Envelope trägt die Request-ID.

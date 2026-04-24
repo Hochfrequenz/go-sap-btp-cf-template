@@ -163,6 +163,44 @@ jobs:
             exit 1
           fi
 
+      - name: Handlers must depend on btp interfaces, not *btp.Service
+        run: |
+          set -euo pipefail
+          # Library-extract prep (#27): handlers and wiring should only
+          # reach into btp through its interfaces (OnPremCaller,
+          # OnPremMutator, JWTValidator) — never through the concrete
+          # *btp.Service. An exception is cmd/server/main.go's
+          # construction seam, where main() calls btp.NewService and
+          # then binds svc.ProxyHandler before handing it into
+          # buildRouter. No other file should mention *btp.Service.
+          #
+          # The allow-list below scopes the match to handler-ish
+          # locations; *btp.Service in cmd/server/main.go is allowed
+          # (construction + passing a method value), but not in
+          # examples/ or in other cmd/* dirs.
+          if rg -n --hidden --no-ignore-vcs \
+              --glob '!cmd/server/main.go' \
+              --glob '!.git/**' \
+              --glob '!vendor/**' --glob '!node_modules/**' \
+              '\*btp\.Service\b' examples cmd 2>/dev/null; then
+            echo "::error::Handlers/wiring must depend on btp interfaces (OnPremCaller / OnPremMutator / JWTValidator), not *btp.Service directly. See internal/btp/doc.go for the library-intent surface." >&2
+            exit 1
+          fi
+
+      - name: internal/btp must not import examples/ or cmd/
+        run: |
+          set -euo pipefail
+          # Library-extract prep (#27): internal/btp is the future
+          # extracted module; if it imports back into the template's
+          # cmd/ or examples/, the extract becomes a circular-dep
+          # surgery instead of a git mv. Pin that now.
+          if rg -n --hidden --no-ignore-vcs \
+              'hochfrequenz/go-sap-btp-cloud-foundry-mwe/(examples|cmd)' \
+              internal/btp 2>/dev/null; then
+            echo "::error::internal/btp imported from cmd/ or examples/. Keep the package standalone — its future as an independent module depends on it." >&2
+            exit 1
+          fi
+
       - name: Hard-coded ./cmd/server must only appear in the known set
         run: |
           set -euo pipefail
