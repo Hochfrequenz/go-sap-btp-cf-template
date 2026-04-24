@@ -37,6 +37,7 @@ internal/btp/
   proxy.go                  http.RoundTripper tunnelling via Connectivity proxy
   auth.go                   XSUAA JWT middleware (signature, aud, exp; see doc)
   authenticator.go          pluggable DestinationAuthenticator registry
+  httperr.go                typed error envelope + AbortError helper
   service.go                orchestrates the three-leg call + Gin pass-through
 web/                        SAP approuter
   package.json              pulls @sap/approuter
@@ -147,7 +148,9 @@ func Handler(svc btp.OnPremCaller) gin.HandlerFunc {
     return func(c *gin.Context) {
         var req Request
         if err := c.ShouldBindJSON(&req); err != nil {            // step 2: validate
-            c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()}); return
+            btp.AbortError(c, http.StatusBadRequest, btp.CodeInvalidRequest,
+                err.Error(), nil)                                  //   validator messages are safe to surface
+            return
         }
         claims := c.MustGet("jwtClaims").(jwt.MapClaims)          // step 3: know the caller
         _ = claims["user_name"]
@@ -159,7 +162,11 @@ func Handler(svc btp.OnPremCaller) gin.HandlerFunc {
             http.Header{"Content-Type": {"application/json"}},
             bytes.NewReader(body),
         )
-        if err != nil { c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()}); return }
+        if err != nil {
+            btp.AbortError(c, http.StatusBadGateway, btp.CodeUpstreamUnreachable,
+                "on-premise call failed", err)                     //   err goes to the log, not the response body
+            return
+        }
         defer resp.Body.Close()
 
         c.DataFromReader(resp.StatusCode, resp.ContentLength,      // step 5: shape response
@@ -200,6 +207,26 @@ Two things to apply the same discipline to, that are easy to forget:
 
 - **Query and path parameters.** `c.ShouldBindQuery(&req)` and `c.ShouldBindUri(&req)` take the same struct-tag rules. Do not read raw `c.Query("amount")` and pass it on.
 - **`interface{}` or `json.RawMessage` in a payload.** If the shape genuinely varies, wrap with a typed envelope that selects the variant, validate the envelope, then parse the raw field once the variant is known. An `interface{}` that travels to `svc.CallOnPremise` is a gift to SAP's Short-Dump generator.
+
+---
+
+### Return errors with a stable envelope
+
+Raw `c.JSON(..., gin.H{"error": err.Error()})` is tempting and wrong — it leaks jwt/keyfunc internals, SAP response bodies, and stack-flavoured Go error text into the response the client reads.
+The template ships one helper (`btp.AbortError`) and one envelope shape, and every handler in the repo uses them:
+
+```go
+btp.AbortError(c, http.StatusBadGateway, btp.CodeUpstreamUnreachable,
+    "on-premise call failed", err)
+// Response body is always:
+// { "error": { "code": "upstream_unreachable", "message": "on-premise call failed", "request_id": "…" } }
+```
+
+The split: the **user-facing message** is what the client sees — keep it stable and generic, clients switch on `code`, not on `message`. The **underlying `err`** goes to `slog.ErrorContext` server-side with the status, code, and request ID so an operator can grep by request ID and see the real cause.
+
+One exception where it's safe (and useful) to pass `err.Error()` as the user message: `go-playground/validator` errors from `c.ShouldBindJSON`. Those messages describe struct-tag violations that the client caused and needs to fix — surfacing them is the whole point.
+
+Canonical codes live in [`internal/btp/httperr.go`](internal/btp/httperr.go) (`CodeInvalidRequest`, `CodeUnauthorized`, `CodeForbidden`, `CodeNotFound`, `CodeUpstreamUnreachable`, `CodeInternal`); declare your own `ErrorCode` constants if you need more.
 
 ---
 

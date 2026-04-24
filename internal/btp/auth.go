@@ -79,13 +79,19 @@ func (v *JWTValidator) Middleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		h := c.GetHeader("Authorization")
 		if !strings.HasPrefix(h, "Bearer ") {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing bearer token"})
+			AbortError(c, http.StatusUnauthorized, CodeUnauthorized,
+				"missing bearer token", nil)
 			return
 		}
 		raw := strings.TrimPrefix(h, "Bearer ")
 		claims, err := v.Parse(raw)
 		if err != nil {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token: " + err.Error()})
+			// The underlying jwt/keyfunc error can carry "kid not found",
+			// "token expired at …", etc. Those are useful for operators
+			// but not something we want on the client — log it, show a
+			// stable message with the same code.
+			AbortError(c, http.StatusUnauthorized, CodeUnauthorized,
+				"invalid or expired token", err)
 			return
 		}
 		c.Set("jwtClaims", claims)

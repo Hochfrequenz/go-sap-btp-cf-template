@@ -210,7 +210,8 @@ func (s *Service) ProxyHandler(c *gin.Context) {
 
 	resp, err := s.CallOnPremise(c.Request.Context(), destName, c.Request.Method, suffix, c.Request.Header, c.Request.Body)
 	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		AbortError(c, http.StatusBadGateway, CodeUpstreamUnreachable,
+			"on-premise call failed", err)
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
