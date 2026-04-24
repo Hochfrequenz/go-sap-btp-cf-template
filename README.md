@@ -71,9 +71,9 @@ flowchart LR
     Go -->|svc.CallOnPremise| BTP[BTP plumbing<br/><i>already wired</i><br/>XSUAA · Destination · CC]
     BTP -->|HTTPS + Basic Auth| SAP[<b>Anchor 1: SAP</b><br/>your ABAP endpoint<br/><code>/sap/bc/rest/zmy_service</code>]
 
-    style Go fill:#d1e7dd,stroke:#0f5132,stroke-width:2px
-    style SAP fill:#fff3cd,stroke:#664d03,stroke-width:2px
-    style BTP fill:#e9ecef,stroke:#6c757d,stroke-dasharray:5 5
+    style Go fill:#d1e7dd,stroke:#0f5132,stroke-width:2px,color:#0f5132
+    style SAP fill:#fff3cd,stroke:#664d03,stroke-width:2px,color:#664d03
+    style BTP fill:#e9ecef,stroke:#6c757d,stroke-dasharray:5 5,color:#495057
 ```
 
 Green and yellow boxes are where you work; the dashed grey box is plumbing that comes with the template.
