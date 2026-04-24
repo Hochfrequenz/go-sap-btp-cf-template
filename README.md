@@ -39,7 +39,7 @@ internal/btp/
   authenticator.go          pluggable DestinationAuthenticator registry
   httperr.go                typed error envelope + AbortError helper
   middleware.go             RequestID + RequireScope helpers
-  service.go                orchestrates the three-leg call + Gin pass-through
+  service.go                orchestrates the three-leg call + CSRF handshake for writes
 web/                        SAP approuter
   package.json              pulls @sap/approuter
   xs-app.json               routes /api/* to the Go backend destination
@@ -262,6 +262,45 @@ The split exists because putting `user_name` into the access log looks convenien
 
 ---
 
+### Calling SAP with a POST — the CSRF case
+
+SAP ICF nodes enforce an [X-CSRF-Token handshake](https://help.sap.com/docs/btp/sap-business-technology-platform/cross-site-request-forgery-protection-3ae1ed51.html) on every write (POST / PUT / DELETE / PATCH): you fetch a token with a GET first, attach it plus the session cookies SAP sets alongside it on the mutating call, and re-fetch once on `403 X-CSRF-Token: Required`. Getting that dance wrong is where most "my first ADT POST returns 403" reports come from.
+
+The Service runs it for you via a second method:
+
+```go
+resp, err := svc.CallOnPremiseMutating(                   // not CallOnPremise
+    c.Request.Context(), "HF_S4", http.MethodPost,
+    "/sap/bc/adt/checkruns",
+    http.Header{
+        "Content-Type": {"application/vnd.sap.adt.checkobjects+xml"},
+        "Accept":       {"application/vnd.sap.adt.checkmessages+xml"},
+    },
+    bytes.NewReader(body),
+)
+```
+
+What `CallOnPremiseMutating` does behind the scenes:
+
+1. **First call per destination** — GET the configured fetch path (default `/sap/bc/adt/discovery`; override with `btp.WithCSRFFetchPath` for non-ADT destinations) with `X-CSRF-Token: Fetch`. The returned token and any SAP session cookies (`SAP_SESSIONID_*`, `sap-usercontext`) are cached on the Service.
+2. **This call and every subsequent mutating call** — reuse the cache, attach the token as `X-CSRF-Token` header and the cookies as a combined `Cookie` header.
+3. **On 403 with `X-CSRF-Token: Required`** — the server-side session was recycled. Invalidate the cache, re-fetch once, retry the mutating call a single time. A 403 WITHOUT that header is a real authorization failure and surfaces to the caller unchanged — retrying wouldn't help.
+
+The request body is buffered up-front so the retry can re-read it. For bodies too large to buffer, write your own handshake on top of `CallOnPremise`.
+
+For handler tests, depend on the narrow `btp.OnPremMutator` interface (same shape as `OnPremCaller`, single method `CallOnPremiseMutating`) and substitute a one-method fake — the CSRF logic is the Service's concern, already tested in `internal/btp/service_csrf_test.go`. Handlers that mix reads and writes declare a composite interface at the usage site:
+
+```go
+type MyClient interface {
+    btp.OnPremCaller
+    btp.OnPremMutator
+}
+```
+
+A complete example with a handler test lives in [`examples/adtcheckrun/`](examples/adtcheckrun/) — ADT syntax-check POST, typed request body with validator tags, and a `fakeMutator` test double.
+
+---
+
 ### Logging — two levels, no warnings
 
 The whole codebase runs on Dave Cheney's [two-levels discipline](https://dave.cheney.net/2015/11/05/lets-talk-about-logging). If you're coming from Java or ABAP, the rules are probably tighter than you're used to — deliberately.
@@ -361,7 +400,7 @@ If you do hit a wall, [How it works under the hood](#how-it-works-under-the-hood
 ### When you need to look deeper
 
 - **Your Destination uses Principal Propagation, not Basic Auth.** The approuter-forwarded user JWT is stashed in the request context under `btp.ForwardedUserTokenKey{}`; implement a `DestinationAuthenticator` that reads it and sets `SAP-Connectivity-Authentication`. See "Extension points" below.
-- **Your on-prem endpoint needs CSRF tokens for writes** (most ADT writes do). See "What this MWE deliberately does *not* do" below — the MWE does not do the `x-csrf-token` handshake for you; wrap `Service.CallOnPremise` in an endpoint-specific handler that does the fetch-then-post two-step.
+- **Your on-prem endpoint needs CSRF tokens for writes** (most ADT writes do). Use `svc.CallOnPremiseMutating` — it runs the `X-CSRF-Token: Fetch` → attach-token-and-cookies → retry-once-on-403 dance transparently. See [Calling SAP with a POST — the CSRF case](#calling-sap-with-a-post--the-csrf-case) below.
 - **`/api/sap/...` returns 502 or an unexpected 401.** See the failure-mode ladder under "Smoke tests" below.
 
 ## Deployment
@@ -701,7 +740,6 @@ For Principal Propagation specifically: the approuter-forwarded user JWT is stas
 
 - **No fake `Mozilla/5.0` User-Agent.** The PHP/Python reference impersonates a browser as a HF-SAP workaround; the SAP BTP spec has no such requirement.
 - **No local-dev mock layer.** Stubbing VCAP is documented above; writing mocks into the code is where drift starts.
-- **No CSRF / `x-csrf-token` handshake.** If your on-prem endpoint needs it, wrap `Service.CallOnPremise` in an endpoint-specific handler that does the fetch-then-post two-step.
 - **No destination-service caching.** Destinations change rarely but we re-fetch on every request for now; add a TTL cache once there is a reason to.
 
 ## How it works under the hood
