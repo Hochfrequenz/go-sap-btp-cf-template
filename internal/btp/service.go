@@ -38,12 +38,55 @@ type Service struct {
 	authenticators *AuthenticatorRegistry
 	mgmtClient     *http.Client
 	onPremClient   *http.Client
+	userAgent      string
 }
 
-// NewService wires a Service using the defaults: 10s management-call timeout,
-// DefaultAuthenticators(), and a TokenFetcher with its own http.Client. Swap
-// fields after construction if you need different timeouts or authenticators.
-func NewService(env *Env) (*Service, error) {
+// DefaultMgmtTimeout is the per-call timeout for management calls (XSUAA
+// token exchange, Destination service lookup). Override with
+// WithMgmtTimeout when a specific service needs a different value.
+const DefaultMgmtTimeout = 10 * time.Second
+
+// DefaultUserAgent is the User-Agent header sent on outbound on-prem
+// requests when no WithUserAgent option is supplied. Forked services
+// should set an explicit UA so traces on the SAP side can distinguish
+// the caller from the template — see cmd/server/main.go for the
+// debug.ReadBuildInfo pattern.
+const DefaultUserAgent = "go-sap-btp-cloud-foundry-mwe/0.1"
+
+// ServiceOption configures NewService. Use WithUserAgent, WithMgmtTimeout,
+// and WithOnPremiseTimeout to tune the defaults; zero options keeps the
+// built-in values.
+type ServiceOption func(*serviceOptions)
+
+type serviceOptions struct {
+	userAgent        string
+	mgmtTimeout      time.Duration
+	onPremiseTimeout time.Duration
+}
+
+// WithUserAgent sets the User-Agent header for outbound on-prem requests.
+// An empty string resets to DefaultUserAgent.
+func WithUserAgent(ua string) ServiceOption {
+	return func(o *serviceOptions) { o.userAgent = ua }
+}
+
+// WithMgmtTimeout overrides the management-call timeout (XSUAA, Destination
+// service lookup). Zero resets to DefaultMgmtTimeout.
+func WithMgmtTimeout(d time.Duration) ServiceOption {
+	return func(o *serviceOptions) { o.mgmtTimeout = d }
+}
+
+// WithOnPremiseTimeout overrides the per-call timeout for on-prem requests.
+// Zero resets to DefaultOnPremiseTimeout.
+func WithOnPremiseTimeout(d time.Duration) ServiceOption {
+	return func(o *serviceOptions) { o.onPremiseTimeout = d }
+}
+
+// NewService wires a Service using the defaults listed in DefaultMgmtTimeout,
+// DefaultOnPremiseTimeout, and DefaultUserAgent, plus DefaultAuthenticators()
+// and a TokenFetcher with its own http.Client. Pass ServiceOptions to tune
+// timeouts or the outbound User-Agent.
+func NewService(env *Env, opts ...ServiceOption) (*Service, error) {
 	if env == nil {
 		return nil, errors.New("nil env")
 	}
@@ -52,6 +95,27 @@ func NewService(env *Env) (*Service, error) {
 	}
 	if env.Conn == nil {
 		return nil, ErrNoConnectivityBinding
+	}
+
+	o := serviceOptions{
+		userAgent:        DefaultUserAgent,
+		mgmtTimeout:      DefaultMgmtTimeout,
+		onPremiseTimeout: DefaultOnPremiseTimeout,
+	}
+	for _, opt := range opts {
+		opt(&o)
+	}
+	// Treat zero/empty field values as "use the default" so callers can
+	// compose a struct of options without knowing which fields they care
+	// about — e.g. WithMgmtTimeout(0) falls back to the constant.
+	if o.userAgent == "" {
+		o.userAgent = DefaultUserAgent
+	}
+	if o.mgmtTimeout == 0 {
+		o.mgmtTimeout = DefaultMgmtTimeout
+	}
+	if o.onPremiseTimeout == 0 {
+		o.onPremiseTimeout = DefaultOnPremiseTimeout
 	}
 
 	tokens := NewTokenFetcher(nil)
@@ -71,8 +135,9 @@ func NewService(env *Env) (*Service, error) {
 		env:            env,
 		tokens:         tokens,
 		authenticators: DefaultAuthenticators(),
-		mgmtClient:     &http.Client{Timeout: 10 * time.Second},
-		onPremClient:   &http.Client{Transport: transport, Timeout: DefaultOnPremiseTimeout},
+		mgmtClient:     &http.Client{Timeout: o.mgmtTimeout},
+		onPremClient:   &http.Client{Transport: transport, Timeout: o.onPremiseTimeout},
+		userAgent:      o.userAgent,
 	}, nil
 }
 
@@ -151,9 +216,12 @@ func (s *Service) callOnce(ctx context.Context, dest *Destination, method, pathS
 	}
 	// A neutral, self-identifying UA. The PHP/Python reference impersonates
 	// a browser as a HF-SAP-specific filter workaround; that is not a BTP
-	// requirement and should not be copied into new services.
+	// requirement and should not be copied into new services. The concrete
+	// value comes from WithUserAgent (or DefaultUserAgent) — forked services
+	// should pass WithUserAgent so SAP-side traces distinguish the caller
+	// from the template.
 	if req.Header.Get("User-Agent") == "" {
-		req.Header.Set("User-Agent", "go-sap-btp-cloud-foundry-mwe/0.1")
+		req.Header.Set("User-Agent", s.userAgent)
 	}
 	// Multi-CC routing header: only set when the destination carries a
 	// LocationId. Setting it otherwise can make the Connectivity service
