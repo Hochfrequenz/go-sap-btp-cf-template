@@ -294,10 +294,14 @@ func (s *Service) ProxyHandler(c *gin.Context) {
 	}
 	c.Writer.WriteHeader(resp.StatusCode)
 	if _, err := io.Copy(c.Writer, resp.Body); err != nil {
-		// Failure here usually means the downstream client disconnected;
-		// the response status is already written so we cannot recover — log
-		// it so operators can spot patterns of SAP responses being cut off.
-		slog.Default().Warn("copying on-prem response to client failed",
+		// Almost always a client disconnect mid-stream; nothing for
+		// operators to act on. Emit at DEBUG so a developer chasing a
+		// specific cut-off case can raise the level locally, but the
+		// production INFO stream stays quiet on normal disconnects.
+		// Deliberately not WARN — see README §"Logging — two levels,
+		// no warnings" for why this template does not use that level.
+		slog.DebugContext(c.Request.Context(),
+			"copying on-prem response to client failed",
 			"destination", destName,
 			"err", err,
 		)

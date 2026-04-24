@@ -262,6 +262,21 @@ The split exists because putting `user_name` into the access log looks convenien
 
 ---
 
+### Logging — two levels, no warnings
+
+The whole codebase runs on Dave Cheney's [two-levels discipline](https://dave.cheney.net/2015/11/05/lets-talk-about-logging). If you're coming from Java or ABAP, the rules are probably tighter than you're used to — deliberately.
+
+1. **Only two levels matter.** `INFO` is useful operational output. `DEBUG` is useful to a developer chasing a specific problem and is off by default in production. That's it.
+2. **Errors are not a log level.** An error is a return value. Handlers return it; only the boundary that cannot return any further (the HTTP response, or `main`) logs it. `btp.AbortError` is that boundary for HTTP responses — it writes the envelope and logs the underlying Go error once, server-side, with the request ID.
+3. **`WARN` doesn't exist in this repo.** If it's serious, handle it as an error. If it isn't, log `INFO`. "Something odd happened but I'm going to continue" is where warnings accumulate that nobody ever acts on — don't write those.
+4. **One access-log line per request.** Already wired in `cmd/server/main.go`'s `requestLog`; don't add "entering handler" / "leaving handler" lines on top. If a handler needs business-event context (e.g. `invoicesync` logs `user + company_code`), emit exactly one line per business event, not per middleware stage.
+
+Enforcement: `.github/workflows/template-guards.yml` greps the tree for `.Warn(` and fails CI on any hit. A new PR that reintroduces warnings is blocked at merge; the error message points back to this section.
+
+Local debugging: set `LOG_LEVEL=debug` before running the server to see `DEBUG`-level lines (e.g. client-disconnect details from `Service.ProxyHandler`). `INFO` is the production default; `ERROR` is available for low-noise deployments.
+
+---
+
 ### Test your handler without touching SAP
 
 > **Coming from ABAP?** Unit-testing in Go is nothing like testing in the SAP stack, and this is good news. A Go test compiles and runs in well under a second — no transport request round-trip, no test user to maintain, no colleague's session to lock, no data to clean up in table `BKPF` afterwards. The red-green-refactor loop that never really worked in ABAP works here because the feedback is cheap. If that sounds unfamiliar, the three tests in this sub-section are a good first encounter: copy them, break something in the handler, watch the test fail in 0.3 s, fix it, watch it pass. That's the whole loop.
