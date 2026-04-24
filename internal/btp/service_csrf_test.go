@@ -327,6 +327,70 @@ func Test_CallOnPremiseMutating_SingleflightDedupesConcurrentFetches(t *testing.
 	then.AssertThat(t, int(sap.mutatingHits.Load()), is.EqualTo(N))
 }
 
+// Test_CallOnPremiseMutating_FetchErrors covers the two error
+// branches of fetchCSRF a happy-path test can't reach: a non-2xx
+// status (with the body snippet included in the returned error for
+// operator triage) and a 200 response missing the X-CSRF-Token
+// header entirely (a misconfigured SAP or a non-CSRF endpoint).
+func Test_CallOnPremiseMutating_FetchErrors(t *testing.T) {
+	t.Run("non-2xx fetch status surfaces body snippet", func(t *testing.T) {
+		sap := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte("Accept header required"))
+		}))
+		defer sap.Close()
+
+		s := newBTPStackRoutedThrough(t, sap.URL)
+		svc, err := btp.NewService(s.env)
+		then.AssertThat(t, err, is.Nil())
+
+		_, err = svc.CallOnPremiseMutating(context.Background(), "D",
+			http.MethodPost, "/x", nil, bytes.NewReader([]byte(`{}`)))
+		then.AssertThat(t, err, is.Not(is.Nil()))
+		then.AssertThat(t, strings.Contains(err.Error(), "status 400"), is.True())
+		// Body snippet included so operators can see WHY SAP rejected.
+		then.AssertThat(t, strings.Contains(err.Error(), "Accept header required"), is.True())
+	})
+
+	t.Run("fetch returns 200 but no X-CSRF-Token header", func(t *testing.T) {
+		sap := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Legitimate 200 — but no token header means this path
+			// is not CSRF-protected (or the fetch path is wrong).
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer sap.Close()
+
+		s := newBTPStackRoutedThrough(t, sap.URL)
+		svc, err := btp.NewService(s.env)
+		then.AssertThat(t, err, is.Nil())
+
+		_, err = svc.CallOnPremiseMutating(context.Background(), "D",
+			http.MethodPost, "/x", nil, bytes.NewReader([]byte(`{}`)))
+		then.AssertThat(t, err, is.Not(is.Nil()))
+		then.AssertThat(t, strings.Contains(err.Error(), "empty X-CSRF-Token header"), is.True())
+	})
+}
+
+// Test_CallOnPremiseMutating_NilBody pins the body==nil branch of
+// CallOnPremiseMutating: a DELETE without a body should run the
+// handshake and send the mutating request normally.
+func Test_CallOnPremiseMutating_NilBody(t *testing.T) {
+	sap := newCSRFSAPServer("/sap/bc/adt/discovery", "tok-1")
+	defer sap.Close()
+
+	s := newBTPStackRoutedThrough(t, sap.server.URL)
+	svc, err := btp.NewService(s.env)
+	then.AssertThat(t, err, is.Nil())
+
+	resp, err := svc.CallOnPremiseMutating(context.Background(), "D",
+		http.MethodDelete, "/sap/bc/adt/objects/zmy", nil, nil)
+	then.AssertThat(t, err, is.Nil())
+	then.AssertThat(t, resp.StatusCode, is.EqualTo(http.StatusOK))
+	_ = resp.Body.Close()
+	then.AssertThat(t, int(sap.fetchHits.Load()), is.EqualTo(1))
+	then.AssertThat(t, int(sap.mutatingHits.Load()), is.EqualTo(1))
+}
+
 // Test_CallOnPremiseMutating_CustomFetchPath pins WithCSRFFetchPath:
 // a fork with non-ADT endpoints can configure its own path and the
 // handshake runs against that.

@@ -6,23 +6,23 @@
 //
 // What makes this example different from invoicesync:
 //
-//  - It depends on btp.OnPremMutator (not btp.OnPremCaller).
-//    CallOnPremiseMutating runs the full X-CSRF-Token handshake
-//    transparently — fetch token + SAP cookies, attach on the
-//    mutating call, re-fetch on 403.
+//   - It depends on btp.OnPremMutator (not btp.OnPremCaller).
+//     CallOnPremiseMutating runs the full X-CSRF-Token handshake
+//     transparently — fetch token + SAP cookies, attach on the
+//     mutating call, re-fetch on 403.
 //
-//  - The target is ADT's syntax-check endpoint
-//    (/sap/bc/adt/checkruns), which accepts a minimal XML payload
-//    and returns check-run results. Any ADT POST endpoint behind
-//    CSRF follows the same wiring; switch the path + payload for
-//    your own service.
+//   - The target is ADT's syntax-check endpoint
+//     (/sap/bc/adt/checkruns), which accepts a minimal XML payload
+//     and returns check-run results. Any ADT POST endpoint behind
+//     CSRF follows the same wiring; switch the path + payload for
+//     your own service.
 //
-//  - The handler-test in handler_test.go uses a one-method fake
-//    that satisfies btp.OnPremMutator — no XSUAA, no Destination
-//    lookup, no Cloud Connector, no CSRF fetch round-trip. The
-//    service-level CSRF logic is already tested in
-//    internal/btp/service_csrf_test.go; the handler test just
-//    exercises handler logic.
+//   - The handler-test in handler_test.go uses a one-method fake
+//     that satisfies btp.OnPremMutator — no XSUAA, no Destination
+//     lookup, no Cloud Connector, no CSRF fetch round-trip. The
+//     service-level CSRF logic is already tested in
+//     internal/btp/service_csrf_test.go; the handler test just
+//     exercises handler logic.
 package adtcheckrun
 
 import (
