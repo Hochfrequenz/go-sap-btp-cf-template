@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"net/http"
 	"slices"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
@@ -22,9 +23,11 @@ const RequestIDHeader = "X-Request-Id"
 // to populate the error envelope; handlers that want to annotate their
 // slog lines with the request ID should do the same.
 //
-// Keep this as a string constant (not a typed key) so the key survives
-// a future package extract without ceremony: both the middleware and
-// the callers (even cross-package) just look up by the same literal.
+// This is a string because Gin's c.Set/c.Get map uses string keys.
+// The context.Context propagation path uses a separately-defined
+// typed key (requestIDCtxKey{}) — that's the canonical Go pattern for
+// ctx.Value to avoid cross-package collisions (go vet / staticcheck
+// flag string keys on context.WithValue).
 const RequestIDContextKey = "request_id"
 
 // RequestID reads an existing X-Request-Id header or generates a
@@ -80,20 +83,36 @@ func newRequestID() string {
 // RequireScope aborts the request with 403 forbidden unless the
 // validated JWT's "scope" claim contains the exact scope string given.
 //
-// The check is exact — `User` matches `User`, not `user`, not `User.Admin`.
-// Partial matching via strings.Contains is the classic bug here
-// (`Unauthorized-User` would match `User`); keeping the check strict
-// means a fork cannot accidentally widen access by tweaking the code.
+// The check is exact — `User` matches `User`, not `user`, not `User.Admin`,
+// not `Unauthorized-User`. Partial matching via strings.Contains /
+// strings.HasPrefix / strings.HasSuffix is the classic bug here; keeping
+// the check strict means a fork cannot accidentally widen access by
+// tweaking the code.
+//
+// **XSUAA qualified-scope gotcha.** Real XSUAA tokens emit scopes
+// qualified with xsappname + tenant, e.g.
+//
+//	"go-btp-mwe!t1234.Admin"
+//
+// not a bare `"Admin"`. Pass the qualified string you actually see in
+// the token — the value of `XSUAACredentials.XSAppName` plus `!t` plus
+// the tenant suffix plus `.` plus the scope template name from
+// `xs-security.json`. Concretely: look at `/api/me`'s response once and
+// copy the exact shape out of the `scope` claim. Forks that pass a bare
+// name will 403 every request — this is the single most common
+// surprise when wiring a first scope-gated route.
 //
 // Install AFTER JWTValidator.Middleware() so "jwtClaims" is already in
 // the context:
 //
 //	api := r.Group("/api")
 //	api.Use(validator.Middleware())
-//	api.GET("/admin", btp.RequireScope("Admin"), adminHandler)
+//	api.GET("/admin", btp.RequireScope("go-btp-mwe!t1234.Admin"), adminHandler)
 //
-// On failure, uses AbortError so the response body is the typed
-// CodeForbidden envelope rather than a bare 403.
+// On failure, AbortError writes the typed CodeForbidden envelope. The
+// underlying miss is NOT logged (err = nil) because 403 is a routine
+// authz decision rather than a server-side error; forks that want the
+// miss logged can wrap RequireScope and log themselves.
 func RequireScope(scope string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		raw, ok := c.Get("jwtClaims")
@@ -122,8 +141,8 @@ func RequireScope(scope string) gin.HandlerFunc {
 }
 
 // extractScopes reads the "scope" claim in either XSUAA shape (an array
-// of strings) or the OAuth 2 bare-string shape (space-separated). Both
-// are valid in the wild; normalising at the read site keeps
+// of strings) or the OAuth 2 bare-string shape (whitespace-separated).
+// Both are valid in the wild; normalising at the read site keeps
 // RequireScope strict without needing two near-identical code paths.
 func extractScopes(claims jwt.MapClaims) []string {
 	switch v := claims["scope"].(type) {
@@ -138,25 +157,10 @@ func extractScopes(claims jwt.MapClaims) []string {
 	case []string:
 		return v
 	case string:
-		// OAuth-2 "scope" is space-separated; splitFields avoids empty
-		// entries on double-space or leading-space input.
-		return splitFields(v)
+		// strings.Fields splits on any Unicode whitespace and drops
+		// empty entries, so double spaces / tabs / leading-trailing
+		// whitespace all Just Work.
+		return strings.Fields(v)
 	}
 	return nil
-}
-
-func splitFields(s string) []string {
-	var out []string
-	start := -1
-	for i := 0; i <= len(s); i++ {
-		if i == len(s) || s[i] == ' ' {
-			if start >= 0 {
-				out = append(out, s[start:i])
-				start = -1
-			}
-		} else if start < 0 {
-			start = i
-		}
-	}
-	return out
 }

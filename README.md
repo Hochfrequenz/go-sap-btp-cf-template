@@ -240,9 +240,11 @@ The moment you add one, use `btp.RequireScope(...)` rather than reading the `sco
 api := r.Group("/api")
 api.Use(validator.Middleware())                                // authn: valid JWT
 api.GET("/admin",
-    btp.RequireScope("Admin"),                                 // authz: exact-match scope
+    btp.RequireScope("go-btp-mwe!t1234.Admin"),                // authz: exact-match qualified scope
     adminHandler)
 ```
+
+> **XSUAA qualified-scope gotcha.** Real XSUAA tokens emit scopes as `<xsappname>!t<tenant>.<ScopeName>` (e.g. `go-btp-mwe!t1234.Admin`), NOT as a bare `"Admin"`. Pass the exact string you see in the token's `scope` claim — hit `/api/me` once after login and copy the shape from there. A bare scope name will 403 every request.
 
 `btp.RequestID()` sits higher on the middleware chain (it's already wired in `cmd/server/main.go`) and serves two purposes at once:
 

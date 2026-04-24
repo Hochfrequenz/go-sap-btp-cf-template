@@ -158,6 +158,65 @@ func Test_RequireScope_RejectsPartialMatch(t *testing.T) {
 	then.AssertThat(t, w.Code, is.EqualTo(http.StatusForbidden))
 }
 
+// Test_RequireScope_RejectsPrefixMatch pins against the complementary
+// regression: "Admin.Read" must not grant "Admin". If the check ever
+// becomes strings.HasPrefix, this test fails. This kind of bug is
+// insidious because lots of scope schemes use dotted hierarchy.
+func Test_RequireScope_RejectsPrefixMatch(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(stubClaimsMiddleware(jwt.MapClaims{"scope": []any{"Admin.Read"}}))
+	r.GET("/x", btp.RequireScope("Admin"), func(c *gin.Context) {
+		t.Fatal("handler should not run")
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	then.AssertThat(t, w.Code, is.EqualTo(http.StatusForbidden))
+}
+
+// Test_RequireScope_AllowsWhenScopeStringSliceContains covers the
+// []string wire shape that extractScopes explicitly supports but none
+// of the other tests exercise.
+func Test_RequireScope_AllowsWhenScopeStringSliceContains(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(stubClaimsMiddleware(jwt.MapClaims{
+		"scope": []string{"User", "Admin"},
+	}))
+	r.GET("/admin", btp.RequireScope("Admin"), func(c *gin.Context) {
+		c.String(http.StatusOK, "ok")
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/admin", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	then.AssertThat(t, w.Code, is.EqualTo(http.StatusOK))
+}
+
+// Test_RequireScope_StringClaimWithDoubleSpaces pins strings.Fields
+// behaviour on the whitespace-separated scope shape: double spaces,
+// tabs, and leading/trailing whitespace must all resolve to the same
+// set of scope tokens.
+func Test_RequireScope_StringClaimWithDoubleSpaces(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	// Deliberately messy: leading space, double space between tokens, trailing tab.
+	r.Use(stubClaimsMiddleware(jwt.MapClaims{"scope": "  User   Admin\t"}))
+	r.GET("/admin", btp.RequireScope("Admin"), func(c *gin.Context) {
+		c.String(http.StatusOK, "ok")
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/admin", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	then.AssertThat(t, w.Code, is.EqualTo(http.StatusOK))
+}
+
 func Test_RequireScope_RejectsWhenMiddlewareAbsent(t *testing.T) {
 	// No stubClaimsMiddleware — jwtClaims is absent. RequireScope must
 	// treat that as forbidden, not as "let through".
