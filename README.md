@@ -373,11 +373,27 @@ cf create-service connectivity lite   go-cc
 
 `cf push` (step 4 below) binds them to the app automatically via `manifest.yml`'s `services:` section.
 
-#### 3. (First deploy only) Confirm which Go buildpack your landscape ships
+#### 3. (First deploy only) Why this repo ships with `binary_buildpack`
 
-This repo targets the classic `cloudfoundry/go-buildpack`, with `GO_INSTALL_PACKAGE_SPEC: ./cmd/server` set in `manifest.yml` so the buildpack knows where `main` lives (it does not auto-discover subpackages the way Paketo does). If `cf buildpacks` on your landscape shows `paketo-buildpacks/go` instead, replace the `buildpacks:` block with:
+This template deploys via the CF **`binary_buildpack`**: you cross-compile a static Linux/amd64 binary locally (or in CI), push it with the rest of the app, and the CF stager runs it as-is.
+That means the stager never invokes the Go toolchain, never fetches deps, never runs `go build`.
+
+Why not `go_buildpack`? On `eu10` as of April 2026 the classic `go_buildpack` (cflinuxfs4 v1.10.44) ships **Go 1.23.12**; this repo's `go.mod` declares `go 1.26`, so Go's auto-toolchain kicks in on the stager, tries to fetch Go 1.26 plus the full dep tree, and the stager OOMs under the org-level memory quota.
+`binary_buildpack` sidesteps all of that.
+
+If your landscape doesn't have this problem (bigger stager memory, `paketo-buildpacks/go` pre-installed, an egress-restricted build container), you can switch back to classic Go staging. Replace the `buildpacks:` block in `manifest.yml` with one of:
 
 ```yaml
+# Classic CF go_buildpack (if you've confirmed it stages cleanly)
+buildpacks:
+  - go_buildpack
+env:
+  GIN_MODE: release
+  GO_INSTALL_PACKAGE_SPEC: ./cmd/server
+```
+
+```yaml
+# Paketo (auto-discovers main via BP_GO_TARGETS)
 buildpacks:
   - paketo-buildpacks/go
 env:
@@ -385,7 +401,7 @@ env:
   BP_GO_TARGETS: ./cmd/server
 ```
 
-Confirmed working on eu10 (AWS Frankfurt) with `go_buildpack` cflinuxfs4 v1.10.44 — [see the walkthrough](docs/btp-deploy-walkthrough.de.md) (DE) for the full replay.
+Confirmed working on eu10 (AWS Frankfurt) via `binary_buildpack` + cross-compile; `go_buildpack` cflinuxfs4 v1.10.44 OOMs there. [See the walkthrough](docs/btp-deploy-walkthrough.de.md) (DE) for the full replay.
 
 ### Pre-flight gotchas
 
@@ -413,11 +429,11 @@ Two conventions to keep in mind while reading this section:
    If you're within 2 of the quota, either free slots by removing a stopped app with its routes (`cf delete <app-name> -r -f` — note that `-r` can free *more* slots than `cf routes` in the current space suggested, because orphan routes from other spaces travel with the app), or ask a global-account admin to raise the quota.
    Symptom when ignored: `Routes quota exceeded for organization '<org>'`, raised before staging begins.
 
-2. **SAP's `go_buildpack` lags upstream Go.**
-   On `eu10` as of April 2026 the buildpack `go_buildpack` cflinuxfs4 v1.10.44 installs **Go 1.23.12**, which has gone out of support since Go 1.26 was released.
-   Our `go.mod` declares `go 1.26`, and staging still succeeds on `eu10` — because Go's auto-toolchain feature fetches the newer toolchain over the network when the stager allows egress.
-   If your landscape blocks egress from build containers, the stager will fail with `go.mod requires go >= 1.26 (running go 1.23.12)` instead.
-   Do not assume post-1.23 language or stdlib features will work in production without testing first.
+2. **You MUST cross-compile `./bin/server` before `cf push`.**
+   The default buildpack here is `binary_buildpack` (see section 3 above for why), which expects the binary to exist in the pushed bundle.
+   `make build-linux` (POSIX) or `scripts\build.ps1` (Windows PowerShell) produces it.
+   A fresh clone without a build-step produces a stager error like `/home/vcap/app/bin/server: not found`.
+   The CD workflow in `.github/workflows/deploy.yml` already does this; manual pushes need to remember the step.
 
 3. **The cockpit steps in section 5b + 5c below require subaccount admin rights.**
    Creating a Role Collection and creating a Destination are both blocked for a plain Space Developer.
@@ -435,8 +451,16 @@ Two conventions to keep in mind while reading this section:
 
 ### 4. cf push
 
+Two steps: build the binary, then push.
+
 ```sh
 cp vars.example.yml vars.yml    # edit for your subaccount domain
+
+# Build the static Linux binary the binary_buildpack will run:
+make build-linux                # POSIX
+# or on Windows PowerShell:
+.\scripts\build.ps1
+
 cf push -f manifest.yml --vars-file vars.yml
 ```
 
@@ -447,17 +471,20 @@ backend-host: go-btp-mwe
 domain: cfapps.eu10.hana.ondemand.com
 ```
 
-> **Manual push on `eu10` commonly OOMs — use the same escape hatch the CD workflow uses.** SAP's `go_buildpack` on `eu10` installed Go 1.23.12 in April 2026; our `go.mod` declares `go 1.26`, so the stager fetches Go's auto-toolchain over the wire and then OOMs while compiling the dep tree (documented in detail under [Pre-flight gotchas](#pre-flight-gotchas) above). The CD workflow at `.github/workflows/deploy.yml` bypasses this by cross-compiling a static Linux binary on the runner and pushing with `binary_buildpack -c './bin/server'`. If you're pushing from your laptop, the same two commands work:
->
-> ```powershell
-> $env:GOOS='linux'; $env:GOARCH='amd64'; $env:CGO_ENABLED='0'
-> go build -tags cloudfoundry -o bin/server ./cmd/server
-> cf push "$BACKEND_HOST" -f manifest.yml --vars-file vars.yml -b binary_buildpack -c './bin/server'
-> # Approuter uses its own buildpack and doesn't need the -b/-c overrides:
-> cf push "$BACKEND_HOST-web" -f manifest.yml --vars-file vars.yml
-> ```
->
-> On bash/zsh use `GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ...`.
+Both recipes wrap the same one-liner, in case you prefer to run it inline:
+
+```sh
+# POSIX:
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/server ./cmd/server
+```
+
+```powershell
+# Windows PowerShell:
+$env:CGO_ENABLED='0'; $env:GOOS='linux'; $env:GOARCH='amd64'
+go build -o bin/server ./cmd/server
+```
+
+`manifest.yml` declares `binary_buildpack` + `command: ./bin/server` so a bare `cf push` works — no `-b` / `-c` flags needed. The CD workflow in `.github/workflows/deploy.yml` does the same thing, it just builds on the GitHub runner instead of your laptop.
 
 ### 5. Post-deploy manual steps (required for the app to work)
 
@@ -573,7 +600,7 @@ Why `/sap/bc/adt/discovery` as the probe: it's a standard ABAP Development Tools
 `.github/workflows/deploy.yml` deploys both apps on every **published GitHub Release** (not on push-to-main, not on plain tag pushes — only the explicit "Publish release" click). The workflow has two jobs:
 
 1. **`gate`** — `go vet`, `go test ./... -race`, `golangci-lint`, `gofmt --diff`. All four must pass green.
-2. **`deploy`** — only runs if `gate` was green. Cross-compiles a static Linux binary on the runner, installs `cf` v8, pushes backend via `binary_buildpack -c './bin/server'` (bypassing the stager-side Go compile which OOMs on `eu10` — see "Pre-flight gotchas" above), pushes the approuter via the manifest's `nodejs_buildpack`, then curls `/healthz` and fails the workflow if it isn't `200 ok`.
+2. **`deploy`** — only runs if `gate` was green. Cross-compiles a static Linux binary on the runner (same `make build-linux` a laptop would run), installs `cf` v8, pushes backend and approuter per `manifest.yml` (backend is already `binary_buildpack` with `command: ./bin/server`, approuter keeps `nodejs_buildpack`), then curls `/healthz` and fails the workflow if it isn't `200 ok`.
 
 ### Required repository secrets
 
@@ -590,9 +617,9 @@ BTP subaccounts commonly enforce SAP ID Service SSO for human users, which means
 
 The alternative — `cf login --sso` with a temporary passcode — is interactive-only and not suitable for CI.
 
-### What the manifest does vs. what CI overrides
+### What the manifest does vs. what CI does
 
-The committed `manifest.yml` still declares `buildpacks: [go_buildpack]` so a manual `cf push` from a laptop keeps working as documented. The CD workflow explicitly overrides that with `-b binary_buildpack -c './bin/server'` because classic `go_buildpack` on `eu10` OOMs while compiling the Go 1.26 toolchain against the full dependency tree, and the org-level memory quota is too tight to grow the backend's `memory:` to give the stager enough RAM. Long-term: switch the manifest default to `binary_buildpack` and commit that change once the rest of the team is ready to rebuild locally before pushing manually.
+The committed `manifest.yml` declares `buildpacks: [binary_buildpack]` with `command: ./bin/server`, so a manual laptop-side `cf push` and the GitHub runner's push do the same thing. Both paths build `./bin/server` first — the CD workflow on the runner, a developer via `make build-linux` / `scripts\build.ps1`. No `-b` / `-c` override flags, no code divergence between manual and automated deploys.
 
 ## Local development
 
