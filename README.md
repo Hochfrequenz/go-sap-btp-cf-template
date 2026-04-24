@@ -1,11 +1,19 @@
 # go-sap-btp-cf-template
 
-A starter template for Go webservices on SAP BTP Cloud Foundry. Fork it, run `go run ./cmd/apply-config` to rewrite module path / app name / CF coordinates from a single `config.yml`, build `./bin/server`, `cf push`. It:
+A starter template for Go webservices on SAP BTP Cloud Foundry, aimed at the middle ground most Go / SAP material misses. Go examples on the public web mostly skip the SAP-side ceremony (XSUAA token quirks, Cloud Connector's three-leg dance, CSRF on writes); SAP examples mostly skip the Go-side engineering (typed errors, testable handlers, CI gates, two-levels logging). This repo tries to cover both sides.
+
+Fork it, run `go run ./cmd/apply-config` to rewrite module path + app name + CF coordinates from a single `config.yml`, build `./bin/server`, `cf push`. (See [Deployment](#deployment) for the BTP-side prerequisites — service instances, Cloud Connector, destination — that `cf push` assumes are already in place.)
+
+**What it is, concretely:**
 
 - runs on **SAP BTP Cloud Foundry** (two apps: Go backend + SAP approuter),
 - authenticates users via **XSUAA** (JWKS-pinned JWT validation: RS256 signature, audience, expiry — see `internal/btp/auth.go` for why issuer is intentionally not checked),
-- calls an **on-premise SAP system** through the **Connectivity + Destination** services (the Cloud Connector three-leg dance),
-- is built on **Gin** and structured for extension toward Auth0 / SSO / Principal Propagation without rewrites.
+- calls an **on-premise SAP system** through the **Connectivity + Destination** services (the Cloud Connector three-leg dance), with a **transparent CSRF handshake** on writes — one call on your side, full fetch → attach → retry on ours,
+- is built on **Gin** with a `DestinationAuthenticator` registry designed so Auth0 / SSO / Principal Propagation can be added as plug-in authenticators without touching the three-leg dance itself — the template ships `NoAuthentication` and `BasicAuthentication`; the other types are a handful of lines each, not a refactor.
+
+**Even as a bare transparent proxy, it earns its keep.** The `/api/sap/:destination/*path` route is deployable as-is. The three-leg dance (XSUAA client-creds → Destination lookup → XSUAA client-creds for Connectivity → proxied call → Basic auth on the way in → CSRF fetch/attach/retry for writes) is the expensive-to-get-right part of talking to SAP from a non-SAP runtime, and it's done once in `internal/btp/`. A team that just wants "hit our on-prem SAP from Cloud Foundry and get the bytes back" can run this unchanged. A team that wants to decorate the call with typed validation, audit logging, or business logic adds a handler — the plumbing underneath stays the same.
+
+**Sidecar / gateway pattern (not out-of-the-box, adaptable).** The SAP-side concerns are cleanly isolated behind one Gin service, so this template is a reasonable starting point if you want a separate small app that hides BTP specifics from a larger business app — deployed alongside the business app in the same space, reached via private route or localhost on a CF sidecar. **Not shipped in the manifest today**: a true sidecar deployment needs either a service-to-service auth mode (the current `/api/*` routes require a user JWT via the approuter) or a second route group without JWT middleware for in-cluster callers. Treat this as "the right bones for the pattern", not "the pattern already wired".
 
 > **Signpost.** First time here?
 > - Building a new endpoint on top of an existing fork → [Adding your service](#adding-your-service--the-80--case).
