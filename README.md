@@ -7,6 +7,12 @@ A minimal working example of a Go webservice that:
 - calls an **on-premise SAP system** through the **Connectivity + Destination** services (the Cloud Connector three-leg dance),
 - is built on **Gin** and structured for extension toward Auth0 / SSO / Principal Propagation without rewrites.
 
+> **Signpost.** First time here?
+> - Building a new endpoint on top of an existing fork → [Adding your service](#adding-your-service--the-80--case).
+> - Just forked this repo and need to configure it → [Using this repo as a template](#using-this-repo-as-a-template).
+> - Deploying for the first time → [Deployment](#deployment).
+> - Wondering what the three-leg dance actually looks like on the wire → [How it works under the hood](#how-it-works-under-the-hood).
+
 ## Repository layout
 
 ```
@@ -56,123 +62,149 @@ Properties of the tool:
 
 ## Adding your service — the 80 % case
 
-Building a new value-adding service that calls ABAP on an on-premise SAP system is **two anchors**: an ABAP endpoint on the SAP side, and a Gin handler on the Go side. The BTP plumbing between them (XSUAA login, Destination lookup, Cloud Connector tunnel, Basic Auth forwarding) is already wired up and you do not need to touch it.
+Building a new value-adding service on top of on-prem SAP is **two anchors**: an ABAP endpoint on the SAP side, and a Gin handler on the Go side. The BTP plumbing between them (XSUAA login, Destination lookup, Cloud Connector tunnel, Basic Auth forwarding) is already wired up and you do not need to touch it.
+
+```mermaid
+flowchart LR
+    User([BTP user]) --> AR[Approuter]
+    AR --> Go[<b>Anchor 2: Go</b><br/>your Gin handler in<br/><code>cmd/server/main.go</code>]
+    Go -->|svc.CallOnPremise| BTP[BTP plumbing<br/><i>already wired</i><br/>XSUAA · Destination · CC]
+    BTP -->|HTTPS + Basic Auth| SAP[<b>Anchor 1: SAP</b><br/>your ABAP endpoint<br/><code>/sap/bc/rest/zmy_service</code>]
+
+    style Go fill:#d1e7dd,stroke:#0f5132,stroke-width:2px
+    style SAP fill:#fff3cd,stroke:#664d03,stroke-width:2px
+    style BTP fill:#e9ecef,stroke:#6c757d,stroke-dasharray:5 5
+```
+
+Green and yellow boxes are where you work; the dashed grey box is plumbing that comes with the template.
+
+---
 
 ### Anchor 1 — in the SAP system: the ABAP endpoint
 
-Your ABAP developer (or you, with a pair of hands on SE80 / ADT) builds the endpoint.
-Anything reachable by an ICF service node works: a RESTful handler at `/sap/bc/rest/<your-service>`, an ADT service at `/sap/bc/adt/...`, a SOAP envelope at `/sap/bc/soap/...`, a RAP service at `/sap/opu/odata4/sap/...`, whatever fits your logic.
+Your ABAP developer (or you, with a pair of hands on SE80 / ADT) builds the endpoint. Anything reachable by an ICF service node works — pick the framework that fits the job:
 
-Pin down, in SAP terms:
+| ABAP framework | URL prefix | Good for |
+| --- | --- | --- |
+| RESTful BSP | `/sap/bc/rest/...` | quick custom JSON/XML endpoints |
+| ADT | `/sap/bc/adt/...` | metadata, source, and development-tool operations |
+| RAP service | `/sap/opu/odata4/sap/...` | new-style OData with transactional behaviour |
+| Legacy SOAP | `/sap/bc/soap/...` | existing SOAP web services |
 
-- the **URL path** inside the S/4 system (e.g. `/sap/bc/rest/zmy_invoice_sync`),
-- the **authentication** your Destination in BTP cockpit uses (Basic Auth is the default; any technical user with the right authorization objects works),
-- the **SAP authorization objects** needed to call it — those the technical user must hold.
+Three things to pin down in SAP terms before you write Go code:
 
-One-time cockpit chore (covered in section 5c of "Post-deploy manual steps" below): create a **Destination** in the BTP subaccount pointing at that SAP system's virtual host on the Cloud Connector, with the technical user's credentials. From then on, every Go handler in this repo reaches the SAP side through that Destination by name.
+| What | Example | Where it's used |
+| --- | --- | --- |
+| URL path | `/sap/bc/rest/zmy_invoice_sync` | goes into `svc.CallOnPremise`'s `path` arg |
+| Authentication | Basic Auth (default) | stored on the BTP Destination, not in the Go code |
+| SAP authorization objects | `S_DEVELOP`, `S_ICF`, domain-specific roles | granted to the technical user, not the BTP user |
+
+> **One-time cockpit chore** (covered in section 5c of "Post-deploy manual steps" below): create a **Destination** in the BTP subaccount pointing at that SAP system's virtual host on the Cloud Connector, with the technical user's credentials. From then on, every Go handler reaches the SAP side through that Destination by name.
+
+---
 
 ### Anchor 2 — in this repo: the Gin handler
 
-Open `cmd/server/main.go`. Routes live in `buildRouter`; the `api` group sits behind the XSUAA JWT middleware, so any `/api/*` route only reaches your handler after the caller's BTP login is validated.
+A handler is four mechanical steps:
+
+1. **Register the route** in `cmd/server/main.go`'s `buildRouter`. Anything on the `api` group is already behind XSUAA JWT validation.
+2. **(optional) Read the authenticated user** from the validated JWT claims the middleware dropped into the Gin context.
+3. **Call on-prem** via `svc.CallOnPremise` — one function call runs the whole three-leg dance.
+4. **Shape the response** back to the caller (stream, transform, wrap, whatever your product wants).
+
+**Step 1 — register the route.**
 
 ```go
 // In buildRouter, next to api.GET("/me", ...):
 api.POST("/invoice-sync", invoiceSyncHandler(svc))
 ```
 
-The handler itself — this is the whole pattern. Imports for this block: `"net/http"`, `"github.com/gin-gonic/gin"`, `"github.com/golang-jwt/jwt/v5"`, and `"<your-module>/internal/btp"`. The validation example in the next sub-section additionally needs `"time"`, `"encoding/json"`, and `"bytes"`.
+**Steps 2–4 — the handler.** The full, typed, compileable example lives at [**`examples/invoicesync/handler.go`**](examples/invoicesync/handler.go) — read that file for the complete pattern (request type with validation tags, `svc.CallOnPremise` call, response streaming).
+
+Here's a mental model-size sketch of what the file contains:
 
 ```go
-func invoiceSyncHandler(svc *btp.Service) gin.HandlerFunc {
+type Request struct {
+    CompanyCode string    `json:"company_code" binding:"required,len=4,uppercase"`
+    AmountCents int64     `json:"amount_cents" binding:"required,min=1"`
+    // ... more fields with validation tags
+}
+
+func Handler(svc *btp.Service) gin.HandlerFunc {
     return func(c *gin.Context) {
-        // Optional — inspect the authenticated user. Claims are already
-        // signature- and audience-validated by the middleware. The
-        // canonical XSUAA user claim is user_name; given_name,
-        // family_name, email, scope, and xs.system.attributes.xs.rolecollections
-        // are also available if the IdP released them.
-        claims := c.MustGet("jwtClaims").(jwt.MapClaims)
+        var req Request
+        if err := c.ShouldBindJSON(&req); err != nil {            // step 2: validate
+            c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()}); return
+        }
+        claims := c.MustGet("jwtClaims").(jwt.MapClaims)          // step 3: know the caller
         _ = claims["user_name"]
 
-        // Call the on-prem SAP endpoint. svc.CallOnPremise runs the full
-        // three-leg token dance, tunnels through the Cloud Connector, and
-        // forwards with the Destination's configured Basic Auth.
-        resp, err := svc.CallOnPremise(
-            c.Request.Context(),
-            "HF_S4",                              // Destination name from the cockpit; your fork names its own
-            http.MethodPost,
-            "/sap/bc/rest/zmy_invoice_sync",      // ABAP path from Anchor 1
-            c.Request.Header,                     // forwarded minus Authorization, Cookie, Host
-            c.Request.Body,                       // forwarded verbatim
+        body, _ := json.Marshal(toABAPPayload(req))
+        resp, err := svc.CallOnPremise(                            // step 4: one call, full chain
+            c.Request.Context(), "HF_S4", http.MethodPost,
+            "/sap/bc/rest/zmy_invoice_sync",
+            http.Header{"Content-Type": {"application/json"}},
+            bytes.NewReader(body),
         )
-        if err != nil {
-            c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
-            return
-        }
+        if err != nil { c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()}); return }
         defer resp.Body.Close()
 
-        // Stream or parse resp.Body however you like. DataFromReader
-        // copies the body to the client verbatim, preserving status
-        // code and content-type. resp.ContentLength can be -1 for
-        // chunked responses; DataFromReader handles that correctly by
-        // falling back to streaming without a Content-Length header.
-        c.DataFromReader(resp.StatusCode, resp.ContentLength,
+        c.DataFromReader(resp.StatusCode, resp.ContentLength,      // step 5: shape response
             resp.Header.Get("Content-Type"), resp.Body, nil)
     }
 }
 ```
 
-That's the whole wiring. For a pure pass-through (no pre/post-processing), the existing `/api/sap/:destination/*path` route already does exactly this — just compose the URL yourself on the caller side. **For anything that writes state on the SAP side, read the next sub-section first — do not ship the raw-body version.**
+For a pure pass-through (no pre/post-processing), the existing `/api/sap/:destination/*path` route already does the forwarding — just compose the URL yourself on the caller side. **For anything that writes state on the SAP side, read the next sub-section first** — validation-before-SAP is how you keep on-prem Short Dumps out of your life.
 
 Unit-test the handler with the fixtures in `internal/btp/service_test.go`; they stand up stubs that respond like the real XSUAA / Destination / CC stack, so you can assert request shape and response translation without deploying.
+
+---
 
 ### Validate and sanitise at the Gin layer, not in SAP
 
 Sanitising a bad payload in ABAP is painful — data-type shaping is verbose, exception handling is heavy, and you cannot easily test an error path without a full transport-request round-trip. The same sanitising in Go is a struct tag and one line. Put the discipline as far to the left as possible.
 
-Rule of thumb: **every byte that reaches `svc.CallOnPremise` has already passed type checks, required-field checks, format and range checks, and enum-value checks in the Gin handler**. If a request can fail validation, it fails here — with a `400` and a clear message — not on the SAP side with a Short Dump.
+> **Rule of thumb.** Every byte that reaches `svc.CallOnPremise` has already passed type checks, required-field checks, format and range checks, and enum-value checks in the Gin handler. If a request can fail validation, it fails here — with a `400` and a clear message — not on the SAP side with a Short Dump.
+
+The request type in [`examples/invoicesync/handler.go`](examples/invoicesync/handler.go) is what a validated body looks like in practice — struct tags do the heavy lifting:
 
 ```go
-type invoiceSyncRequest struct {
+type Request struct {
     CompanyCode string    `json:"company_code" binding:"required,len=4,uppercase"`
     PostingDate time.Time `json:"posting_date" binding:"required"`
     AmountCents int64     `json:"amount_cents" binding:"required,min=1"`
     Currency    string    `json:"currency"     binding:"required,oneof=EUR USD GBP"`
     Reference   string    `json:"reference"    binding:"max=16"`
 }
-
-func invoiceSyncHandler(svc *btp.Service) gin.HandlerFunc {
-    return func(c *gin.Context) {
-        var req invoiceSyncRequest
-        if err := c.ShouldBindJSON(&req); err != nil {
-            c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-            return
-        }
-        // From here on, every field is typed and within contract. Only
-        // after this line does the caller's payload deserve to see the
-        // on-prem system.
-        body, _ := json.Marshal(toABAPPayload(req))
-        // ... svc.CallOnPremise(..., bytes.NewReader(body)) ...
-    }
-}
 ```
 
-Gin's binding uses [`go-playground/validator`](https://github.com/go-playground/validator); the tag vocabulary covers required / length / regex / enum / cross-field rules (`required_with`, `gtfield`, etc.). For shape-checks beyond the tag language, add an explicit `Validate()` method on the request type and call it right after `ShouldBindJSON`.
+Gin's binding uses [`go-playground/validator`](https://github.com/go-playground/validator); the tag vocabulary covers required / length / regex / enum / cross-field rules (`required_with`, `gtfield`, etc.). For shape-checks beyond the tag language, add a `Validate()` method on the request type and call it right after `ShouldBindJSON`.
+
+> **Do not fool around with raw bytes.** The raw-forward pattern — reading `c.Request.Body` and piping it straight into `svc.CallOnPremise` — is fine **only** for the built-in `/api/sap/:destination/*path` transparent proxy, where the caller is trusted to build whatever payload they mean. For every endpoint you write: unmarshal into a typed struct, validate via struct tags (or an explicit `Validate()`), then marshal the ABAP-side shape yourself. `[]byte` and `json.RawMessage` that travel to `svc.CallOnPremise` unchecked are how SAP ends up with Short Dumps and how you end up debugging across three layers at 23:00.
 
 Two things to apply the same discipline to, that are easy to forget:
 
 - **Query and path parameters.** `c.ShouldBindQuery(&req)` and `c.ShouldBindUri(&req)` take the same struct-tag rules. Do not read raw `c.Query("amount")` and pass it on.
 - **`interface{}` or `json.RawMessage` in a payload.** If the shape genuinely varies, wrap with a typed envelope that selects the variant, validate the envelope, then parse the raw field once the variant is known. An `interface{}` that travels to `svc.CallOnPremise` is a gift to SAP's Short-Dump generator.
 
+---
+
 ### What you do NOT need to understand
 
-The middleware and service code hide most of the BTP specifics. Unless you hit a bug or an edge, you can safely ignore:
+The middleware and service code hide most of the BTP specifics. For the 80 % case you can assume each of the following without looking:
 
-- what XSUAA emits as `aud` and `iss` (the middleware validates signature, audience, expiry; invariants are in `internal/btp/auth.go`),
-- how the three-leg token dance is sequenced (`internal/btp/service.go`),
-- which headers `skipForwardedHeader` strips on forwarding (hop-by-hop, `Authorization`, `Cookie`, `Host` — the authenticator sets a fresh Authorization from the Destination),
-- path-traversal defence — `Service.CallOnPremise` rejects `..` in the path suffix before anything leaves the process, so a handler can accept a path segment from the caller without building that check again itself.
+| Concern | Handled by | Assume that |
+| --- | --- | --- |
+| XSUAA `aud` / `iss` claim shapes | `internal/btp/auth.go` | the caller is authenticated if your handler runs |
+| The three-leg token dance (XSUAA → Dest → XSUAA → CC) | `internal/btp/service.go` | `svc.CallOnPremise` just works; one call, full round-trip |
+| Which headers get forwarded | `skipForwardedHeader` in `service.go` | hop-by-hop + `Authorization` + `Cookie` + `Host` are stripped; everything else flows through |
+| Path-traversal defence | `Service.CallOnPremise` | `..` in the `path` suffix is rejected before anything leaves the process |
+| XSUAA token expiry mid-request | `tokens.go` + retry in `service.go` | a stale connectivity token on a body-less call self-heals once without a 500 |
 
-If you do hit a wall, see "How it works under the hood" near the bottom of this README.
+If you do hit a wall, [How it works under the hood](#how-it-works-under-the-hood) near the bottom of this README has the full diagram and the per-layer invariants.
+
+---
 
 ### When you need to look deeper
 
@@ -280,9 +312,10 @@ domain: cfapps.eu10.hana.ondemand.com
 
 ### 5. Post-deploy manual steps (required for the app to work)
 
-Even after a green `cf push`, **three things still need to be done by a human in the BTP cockpit** before requests succeed:
+Even after a green `cf push`, three things still need to be done by a human in the BTP cockpit before requests succeed. Each is a one-time chore per deploy — expand the step you're on:
 
-#### 5a. Update XSUAA redirect URIs
+<details>
+<summary><b>5a. Update XSUAA redirect URIs</b> — makes OAuth login not bounce with "redirect URI mismatch"</summary>
 
 The shipped `xs-security.json` has an empty `redirect-uris` array — we cannot know the approuter's URL until the first push. After deploy:
 
@@ -293,7 +326,10 @@ The shipped `xs-security.json` has an empty `redirect-uris` array — we cannot 
 
 Skipping this yields "redirect URI mismatch" on the first OAuth login.
 
-#### 5b. Create a Role Collection and assign it to yourself
+</details>
+
+<details>
+<summary><b>5b. Create a Role Collection and assign it to yourself</b> — only matters once you add a scope-gated route</summary>
 
 `xs-security.json` defines a `User` role template. XSUAA issues tokens without scopes until a Role Collection containing that role is assigned to your BTP user.
 
@@ -304,7 +340,10 @@ Skipping this yields "redirect URI mismatch" on the first OAuth login.
 
 The `/api/*` routes this MWE ships with do **not** enforce the `User` scope — the JWT middleware only validates signature, audience, and expiry, so a valid XSUAA user passes regardless of Role Collection. 5b matters the moment you add a scope-gated route (e.g. `c.MustGet("jwtClaims")` then checking `scope` contains `User`); without 5b, that route would 403 even though login succeeds.
 
-#### 5c. Create a Destination pointing at your on-prem system
+</details>
+
+<details>
+<summary><b>5c. Create a Destination pointing at your on-prem system</b> — this is what <code>svc.CallOnPremise</code> resolves through</summary>
 
 BTP cockpit → subaccount → Connectivity → **Destinations** → New Destination:
 
@@ -320,13 +359,14 @@ BTP cockpit → subaccount → Connectivity → **Destinations** → New Destina
 
 Once this exists, `https://<approuter-host>.<domain>/api/sap/HfSap/<path>` will work. Until it does, `/api/sap/HfSap/...` returns 502 from the Go backend.
 
+</details>
+
 ### 6. Smoke tests
 
-Run the three checks in order. If one fails, the earlier ones still isolate where in the chain things broke.
+Three layered checks, running in order. If one fails, the earlier ones still isolate where in the chain things broke. Substitute `<approuter-host>` and `<domain>` for your deploy — typically `go-btp-mwe-web` and e.g. `cfapps.eu10.hana.ondemand.com`.
 
-Substitute `<approuter-host>` and `<domain>` for your deploy (from step 3 — typically `go-btp-mwe-web` and e.g. `cfapps.eu10.hana.ondemand.com`).
-
-#### 6a. `/healthz` — approuter reaches the Go backend
+<details>
+<summary><b>6a. <code>/healthz</code></b> — approuter reaches the Go backend (no auth)</summary>
 
 ```sh
 curl -i https://<approuter-host>.<domain>/healthz
@@ -334,7 +374,10 @@ curl -i https://<approuter-host>.<domain>/healthz
 
 Expected: `HTTP/1.1 200 OK` with body `ok`. `/healthz` is explicitly marked `authenticationType: none` in `web/xs-app.json`, so this proves the approuter is up and forwarding without needing auth. If this fails, the approuter or backend didn't start — check `cf app <backend-host>` and `cf app <approuter-host>`.
 
-#### 6b. `/api/me` — full OAuth + JWT-validation chain
+</details>
+
+<details>
+<summary><b>6b. <code>/api/me</code></b> — full OAuth + JWT-validation chain (needs a browser)</summary>
 
 Open in a browser — `curl` alone cannot complete the XSUAA SSO dance. Use whatever your OS opens HTTPS URLs with (`open` on macOS, `start` on Windows cmd, `xdg-open` on Linux), or paste the URL:
 
@@ -346,7 +389,10 @@ Expected: a JSON body with a `claims` object — your `email`, `given_name`, `fa
 
 A `401 invalid token: ... invalid audience` here points at section 7 of this deployment's tracking issue — XSUAA emits `aud` in the `sb-<xsappname>!t<tenant>` (`ClientID`) form, not bare `<xsappname>`.
 
-#### 6c. `/api/sap/<destination-name>/sap/bc/adt/discovery` — full three-leg call to on-prem
+</details>
+
+<details>
+<summary><b>6c. <code>/api/sap/&lt;destination&gt;/sap/bc/adt/discovery</code></b> — full three-leg call to on-prem SAP</summary>
 
 Simplest: open the URL in the same browser you used for 6b — the approuter session cookie is already set, and the browser will offer the XML body as a download. A 23 KB `*.xml` download is the success signal.
 
@@ -357,16 +403,21 @@ curl -L -b "JSESSIONID=<value-from-devtools>" \
   https://<approuter-host>.<domain>/api/sap/<destination-name>/sap/bc/adt/discovery
 ```
 
-Expected: `200 application/atomsvc+xml` with a body starting `<?xml version="1.0" ... <app:service ...>`. That one call exercises the destination-service lookup, both XSUAA `client_credentials` fetches, the Cloud Connector proxy tunnel, and Basic Auth against the on-premise SAP system — in the three-leg sequence described in the architecture diagram above.
+Expected: `200 application/atomsvc+xml` with a body starting `<?xml version="1.0" ... <app:service ...>`. That one call exercises the destination-service lookup, both XSUAA `client_credentials` fetches, the Cloud Connector proxy tunnel, and Basic Auth against the on-premise SAP system — in the three-leg sequence described in the architecture diagram at the bottom of this README.
 
 Why `/sap/bc/adt/discovery` as the probe: it's a standard ABAP Development Tools endpoint (used by [`Hochfrequenz/adtler`](https://github.com/Hochfrequenz/adtler) as the CSRF-preflight target), available on any ADT-enabled S/4 system, and reachable by any authenticated ADT developer user — so it rarely trips on fine-grained authorization. If your destination points at a non-S/4 system (for example a HANA XS-only host), substitute an endpoint your destination user has read access to.
 
-Common failure modes, in the order they get more annoying to diagnose:
+</details>
+
+<details>
+<summary><b>Failure-mode ladder</b> — what each error code usually means, in order of "more annoying to diagnose"</summary>
 
 - `404` from the approuter: the backend isn't bound to the destination `GoBackend` that `web/xs-app.json` references, or the backend crashed. `cf logs <backend-host> --recent`.
 - `401 invalid audience` or `... invalid issuer`: section 7. The JWT middleware expects a token shape XSUAA does not emit. Fix is in `internal/btp/auth.go`.
 - `502` from the Go backend: the destination lookup succeeded but the on-premise call failed. Most common causes: the destination's virtual host is not exposed by the Cloud Connector, or the Cloud Connector is red.
 - `403` with an SAP-branded body: the destination's stored user authenticated successfully but does not have authorization for the path you chose. Switch the path, not the destination.
+
+</details>
 
 ## Continuous deployment
 
@@ -408,7 +459,10 @@ go test ./... -covermode=count -coverprofile=coverage.out
 
 CI enforces 90% line coverage (`.github/workflows/coverage.yml`).
 
-If you need to exercise Gin handlers against real (stub) BTP services locally, set the env explicitly. The required shape matches `internal/btp/env.go` struct tags:
+If you need to exercise Gin handlers against real (stub) BTP services locally, set the env explicitly — the required shape matches `internal/btp/env.go` struct tags.
+
+<details>
+<summary><b>VCAP env stub</b> — expand to copy</summary>
 
 ```sh
 export VCAP_APPLICATION='{"application_id":"x","application_name":"go-btp-mwe","space_name":"dev","uris":["localhost"]}'
@@ -424,6 +478,8 @@ export VCAP_SERVICES='{
 }'
 go run ./cmd/server
 ```
+
+</details>
 
 A broken `VCAP_SERVICES` payload produces a single error listing **all** problems at once — modeled on [Hochfrequenz/sap-mcp-config](https://github.com/Hochfrequenz/sap-mcp-config). No more "fix one field, redeploy, find the next missing field."
 
