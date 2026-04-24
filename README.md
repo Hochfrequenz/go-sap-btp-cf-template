@@ -38,6 +38,7 @@ internal/btp/
   auth.go                   XSUAA JWT middleware (signature, aud, exp; see doc)
   authenticator.go          pluggable DestinationAuthenticator registry
   httperr.go                typed error envelope + AbortError helper
+  middleware.go             RequestID + RequireScope helpers
   service.go                orchestrates the three-leg call + Gin pass-through
 web/                        SAP approuter
   package.json              pulls @sap/approuter
@@ -227,6 +228,35 @@ The split: the **user-facing message** is what the client sees — keep it stabl
 One exception where it's safe (and useful) to pass `err.Error()` as the user message: `go-playground/validator` errors from `c.ShouldBindJSON`. Those messages describe struct-tag violations that the client caused and needs to fix — surfacing them is the whole point.
 
 Canonical codes live in [`internal/btp/httperr.go`](internal/btp/httperr.go) (`CodeInvalidRequest`, `CodeUnauthorized`, `CodeForbidden`, `CodeNotFound`, `CodeUpstreamUnreachable`, `CodeInternal`); declare your own `ErrorCode` constants if you need more.
+
+---
+
+### Guard routes with scopes and correlate logs with a request ID
+
+The JWT middleware only checks signature, audience, and expiry — it does **not** enforce scopes, because this MWE ships no scope-gated route.
+The moment you add one, use `btp.RequireScope(...)` rather than reading the `scope` claim by hand: the helper does exact-match (no `strings.Contains` trap where `Unauthorized-User` would match `User`) and produces the same 403 envelope as every other error in the repo.
+
+```go
+api := r.Group("/api")
+api.Use(validator.Middleware())                                // authn: valid JWT
+api.GET("/admin",
+    btp.RequireScope("Admin"),                                 // authz: exact-match scope
+    adminHandler)
+```
+
+`btp.RequestID()` sits higher on the middleware chain (it's already wired in `cmd/server/main.go`) and serves two purposes at once:
+
+- The `X-Request-Id` on the response echoes the inbound header or a generated ID, so a client retrying a flaky call can quote "my call with request-id `abc123` failed" and oncall greps straight to the right log line.
+- The ID lands in the Gin context under `btp.RequestIDContextKey`. `btp.AbortError` picks it up automatically and the access log in `requestLog` emits it as a structured field, so every line related to one request shares one ID without any per-handler plumbing.
+
+Two log layers, one rule each:
+
+| Layer | Fields | What it is NOT |
+| --- | --- | --- |
+| Access log in `cmd/server/main.go` — one line per request | method, path (no query), status, duration, client IP, request_id | Never user identity, never claim values, never query string. |
+| Handler-level `slog.InfoContext` (e.g. `invoicesync` emits the authenticated user for audit) | whatever the business event needs | Never a per-stage trace; keep to one line per *business event*, not per middleware. |
+
+The split exists because putting `user_name` into the access log looks convenient until you put that user's email into a `?owner=…` query string and leak PII through the side channel. Keep access logs claim-free; put audit-worthy fields where the handler knows the context.
 
 ---
 
