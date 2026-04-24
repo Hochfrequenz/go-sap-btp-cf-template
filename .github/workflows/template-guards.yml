@@ -144,6 +144,25 @@ jobs:
             exit 1
           fi
 
+      - name: No .Warn( log calls — template policy is INFO or DEBUG
+        run: |
+          set -euo pipefail
+          # This repo follows Dave Cheney's two-levels discipline
+          # (https://dave.cheney.net/2015/11/05/lets-talk-about-logging):
+          # INFO for useful operational output, DEBUG for developer-
+          # only context. No WARN — either it's an error and gets
+          # returned, or it's information and gets logged as INFO.
+          #
+          # Scanning the production tree only (internal/, cmd/,
+          # examples/). README and docs/ are not scanned because prose
+          # legitimately discusses .Warn when explaining the policy.
+          if rg -n --hidden --no-ignore-vcs \
+              --glob 'internal/**' --glob 'cmd/**' --glob 'examples/**' \
+              '\.Warn\(' .; then
+            echo "::error::This repo does not use .Warn(). Elevate to a returned error, or demote to INFO/DEBUG. See README §'Logging — two levels, no warnings'." >&2
+            exit 1
+          fi
+
       - name: Hard-coded ./cmd/server must only appear in the known set
         run: |
           set -euo pipefail

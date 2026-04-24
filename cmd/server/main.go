@@ -7,11 +7,13 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"runtime/debug"
+	"strings"
 	"syscall"
 	"time"
 
@@ -21,7 +23,7 @@ import (
 )
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevelFromEnv()}))
 	slog.SetDefault(logger)
 
 	env, err := btp.LoadEnv()
@@ -57,22 +59,61 @@ func main() {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
+	// Runtime server failures land on serverErr; signal shutdowns land
+	// on ctx.Done(). Select over both so we have ONE exit path with one
+	// log line — not two (goroutine-local + main) that could produce
+	// different log shapes for the same class of event.
+	serverErr := make(chan error, 1)
 	go func() {
 		logger.Info("server listening", "addr", srv.Addr)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			logger.Error("server terminated unexpectedly", "err", err)
-			cancel()
+			serverErr <- err
 		}
 	}()
 
-	<-ctx.Done()
-	// CF sends SIGTERM and waits ~10s before SIGKILL. Give handlers most of
-	// that budget to drain in-flight work.
-	logger.Info("shutdown signal received; draining")
+	select {
+	case err := <-serverErr:
+		logger.Error("server terminated unexpectedly", "err", err)
+	case <-ctx.Done():
+		logger.Info("shutdown signal received; draining")
+	}
+	// CF sends SIGTERM and waits ~10s before SIGKILL. Give handlers
+	// most of that budget to drain in-flight work. Reached from both
+	// the signal path AND the server-error path, so a crash and a
+	// clean shutdown go through the same drain logic.
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer shutdownCancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.Error("graceful shutdown failed", "err", err)
+	}
+}
+
+// logLevelFromEnv reads LOG_LEVEL and maps it to slog.Level. INFO by
+// default; DEBUG in local dev via `LOG_LEVEL=debug go run ./cmd/server`.
+// Deliberately the only knob — no YAML, no flags, no framework config.
+// ERROR is supported for forks that want to suppress INFO in low-noise
+// deployments, but WARN is intentionally NOT mapped: this template does
+// not use that level (see README §"Logging — two levels, no warnings").
+func logLevelFromEnv() slog.Level {
+	raw := os.Getenv("LOG_LEVEL")
+	switch strings.ToLower(raw) {
+	case "":
+		return slog.LevelInfo
+	case "debug":
+		return slog.LevelDebug
+	case "info":
+		return slog.LevelInfo
+	case "error":
+		return slog.LevelError
+	default:
+		// Unknown value (including "warn", which is intentionally not
+		// mapped per README §"Logging"). Fall back to INFO and tell
+		// the operator on stderr so a typo or a misremembered setting
+		// does not silently pick a level the operator did not intend.
+		fmt.Fprintf(os.Stderr,
+			"LOG_LEVEL=%q ignored; use debug|info|error. See README §Logging.\n",
+			raw)
+		return slog.LevelInfo
 	}
 }
 

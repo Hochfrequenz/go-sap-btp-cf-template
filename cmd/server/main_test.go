@@ -16,6 +16,34 @@ import (
 	"github.com/hochfrequenz/go-sap-btp-cloud-foundry-mwe/internal/btp"
 )
 
+// Test_logLevelFromEnv_MapsKnownAndUnknown pins the LOG_LEVEL contract
+// that lives in the README §"Logging" section: debug/info/error are
+// recognised, empty defaults to INFO, and anything else (crucially
+// "warn", which the template deliberately does not map) also falls
+// back to INFO. A future refactor that tries to be "helpful" by
+// mapping warn → WarnLevel would trip this test.
+func Test_logLevelFromEnv_MapsKnownAndUnknown(t *testing.T) {
+	cases := []struct {
+		in   string
+		want slog.Level
+	}{
+		{"", slog.LevelInfo},
+		{"debug", slog.LevelDebug},
+		{"DEBUG", slog.LevelDebug},
+		{"info", slog.LevelInfo},
+		{"error", slog.LevelError},
+		{"warn", slog.LevelInfo},     // deliberately not mapped
+		{"warning", slog.LevelInfo},  // deliberately not mapped
+		{"trace", slog.LevelInfo},    // unknown → INFO
+		{"nonsense", slog.LevelInfo}, // unknown → INFO
+	}
+	for _, c := range cases {
+		t.Setenv("LOG_LEVEL", c.in)
+		got := logLevelFromEnv()
+		then.AssertThat(t, got, is.EqualTo(c.want))
+	}
+}
+
 // Test_requestLog_OmitsQueryStringAndClaims pins the deliberate-omission
 // policy documented on requestLog: the access log records method, path,
 // status, duration, client IP, and request ID — never query string,
