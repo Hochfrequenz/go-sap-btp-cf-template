@@ -76,6 +76,8 @@ Properties of the tool:
 
 `README.md` and `docs/btp-deploy-walkthrough.de.md` are **not** rewritten by the tool — they describe the original Hochfrequenz deployment and are meant to read as HF-flavoured prose. Strip or replace them in your fork as you see fit.
 
+> **If you forked the old name** (`go-sap-btp-cloud-foundry-mwe`): GitHub redirects web URLs to the current name, but **the Go module system does not follow the redirect** — the module name lives in `go.mod` and every import resolves against that. Update `go.mod`'s `module` line + every `github.com/hochfrequenz/go-sap-btp-cloud-foundry-mwe/...` import to `github.com/hochfrequenz/go-sap-btp-cf-template/...` in one pass. `gofmt` and `go build` will guide you the rest of the way.
+
 ## Adding your service — the 80 % case
 
 Building a new value-adding service on top of on-prem SAP is **two anchors**: an ABAP endpoint on the SAP side, and a Gin handler on the Go side. The BTP plumbing between them (XSUAA login, Destination lookup, Cloud Connector tunnel, Basic Auth forwarding) is already wired up and you do not need to touch it.
