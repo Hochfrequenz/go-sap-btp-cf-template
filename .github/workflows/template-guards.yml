@@ -175,6 +175,11 @@ jobs:
           #   - README.md               : walkthrough + escape-hatch docs
           #   - docs/                   : walkthrough prose
           #   - cmd/apply-config/       : mentioned in rewriter comments
+          #   - cmd/server/             : the package itself — comments
+          #                               legitimately reference the run
+          #                               command in LOG_LEVEL / buildUA
+          #                               examples. This directory cannot
+          #                               meaningfully drift from the name.
           if rg -n --hidden --no-ignore-vcs \
               --glob '!manifest.yml' \
               --glob '!Procfile' \
@@ -183,6 +188,7 @@ jobs:
               --glob '!.github/workflows/**' \
               --glob '!README.md' --glob '!docs/**' \
               --glob '!cmd/apply-config/**' \
+              --glob '!cmd/server/**' \
               --glob '!.git/**' \
               --glob '!vendor/**' --glob '!node_modules/**' \
               '\./cmd/server' .; then
