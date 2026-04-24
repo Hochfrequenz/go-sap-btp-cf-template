@@ -1,4 +1,4 @@
-module github.com/hochfrequenz/go-sap-btp-cloud-foundry-mwe
+module github.com/hochfrequenz/go-sap-btp-cf-template
 
 go 1.26
 

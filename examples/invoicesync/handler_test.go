@@ -15,8 +15,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 
-	"github.com/hochfrequenz/go-sap-btp-cloud-foundry-mwe/examples/invoicesync"
-	"github.com/hochfrequenz/go-sap-btp-cloud-foundry-mwe/internal/btp"
+	"github.com/hochfrequenz/go-sap-btp-cf-template/examples/invoicesync"
+	"github.com/hochfrequenz/go-sap-btp-cf-template/internal/btp"
 )
 
 // fakeOnPrem is the canonical handler-test double: a one-method fake

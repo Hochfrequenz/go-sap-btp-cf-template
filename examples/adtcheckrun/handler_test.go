@@ -15,8 +15,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 
-	"github.com/hochfrequenz/go-sap-btp-cloud-foundry-mwe/examples/adtcheckrun"
-	"github.com/hochfrequenz/go-sap-btp-cloud-foundry-mwe/internal/btp"
+	"github.com/hochfrequenz/go-sap-btp-cf-template/examples/adtcheckrun"
+	"github.com/hochfrequenz/go-sap-btp-cf-template/internal/btp"
 )
 
 // fakeMutator is the canonical handler-test double for CSRF-flavoured

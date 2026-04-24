@@ -98,7 +98,7 @@ jobs:
           # cmd/apply-config/. Using the full path silently never
           # matches and the gate fires on every run.
           if grep -rn --include='*.go' --exclude-dir=apply-config \
-              'github.com/hochfrequenz/go-sap-btp-cloud-foundry-mwe' .; then
+              'github.com/hochfrequenz/go-sap-btp-cf-template' .; then
             echo "::error::stale module path survived apply-config" >&2
             exit 1
           fi
@@ -138,7 +138,7 @@ jobs:
               --glob '!.github/workflows/template-guards.yml' \
               --glob '!.git/**' \
               --glob '!vendor/**' --glob '!node_modules/**' \
-              'github\.com/hochfrequenz/go-sap-btp-cloud-foundry-mwe' .; then
+              'github\.com/hochfrequenz/go-sap-btp-cf-template' .; then
             echo "::error::The template module path appeared outside the allow-listed files above." >&2
             echo "::error::Either add it to cmd/apply-config so apply-config rewrites the new file, or expand the allow-list in .github/workflows/template-guards.yml." >&2
             exit 1
@@ -195,7 +195,7 @@ jobs:
           # cmd/ or examples/, the extract becomes a circular-dep
           # surgery instead of a git mv. Pin that now.
           if rg -n --hidden --no-ignore-vcs \
-              'hochfrequenz/go-sap-btp-cloud-foundry-mwe/(examples|cmd)' \
+              'hochfrequenz/go-sap-btp-cf-template/(examples|cmd)' \
               internal/btp 2>/dev/null; then
             echo "::error::internal/btp imported from cmd/ or examples/. Keep the package standalone — its future as an independent module depends on it." >&2
             exit 1

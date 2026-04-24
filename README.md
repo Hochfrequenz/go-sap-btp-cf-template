@@ -1,11 +1,17 @@
-# go-sap-btp-cloud-foundry-mwe
+# go-sap-btp-cf-template
 
-A minimal working example of a Go webservice that:
+A starter template for Go webservices on SAP BTP Cloud Foundry, aimed at a middle ground SAP-side and Go-side examples we found tend to skip individually. The Go examples on the public web we surveyed tend to skip the SAP-side ceremony (XSUAA token quirks, Cloud Connector's three-leg dance, CSRF on writes); the SAP examples we surveyed tend to skip the Go-side engineering (typed errors, testable handlers, CI gates, two-levels logging). This tries to cover both.
+
+Once the BTP prerequisites are in place (see [Deployment](#deployment) — XSUAA / Destination / Connectivity service instances, Cloud Connector paired and exposing a virtual host, a destination pointing at it): fork, `go run ./cmd/apply-config` to rewrite module path + app name + CF coordinates from a single `config.yml`, build `./bin/server`, `cf push`.
+
+**What it is, concretely:**
 
 - runs on **SAP BTP Cloud Foundry** (two apps: Go backend + SAP approuter),
 - authenticates users via **XSUAA** (JWKS-pinned JWT validation: RS256 signature, audience, expiry — see `internal/btp/auth.go` for why issuer is intentionally not checked),
-- calls an **on-premise SAP system** through the **Connectivity + Destination** services (the Cloud Connector three-leg dance),
-- is built on **Gin** and structured for extension toward Auth0 / SSO / Principal Propagation without rewrites.
+- calls an **on-premise SAP system** through the **Connectivity + Destination** services (the Cloud Connector three-leg dance), with a **transparent CSRF handshake** on writes — one call on your side, full fetch → attach → retry on ours (the mutating call buffers its request body up-front so the retry can replay it),
+- is built on **Gin** with a `DestinationAuthenticator` registry designed so **Principal Propagation** / SSO / OAuth2 client-credentials can be added as plug-in authenticators without touching the three-leg dance itself. The template ships `NoAuthentication` and `BasicAuthentication`; Principal Propagation specifically plugs in cleanly because the inbound JWT is already stashed under `btp.ForwardedUserTokenKey{}`. Swapping the user-auth layer to Auth0 is a different exercise — it replaces the JWT validator wiring in `cmd/server/main.go`, not a destination authenticator.
+
+**Even as a bare transparent proxy, it earns its keep.** The `/api/sap/:destination/*path` route is deployable after `apply-config` fills in `config.yml` + `vars.yml`, and it abstracts the SAP-side concerns a first-deploy needs: XSUAA client-creds for both the Destination service and the Connectivity service, destination lookup, the proxied on-prem call through the Cloud Connector, Basic auth on the SAP side, CSRF fetch/attach/retry for writes. What it does NOT abstract: destination-service caching, destination-secret rotation, Cloud Connector failover, XSUAA zone/tenant switching — those are follow-up work when they become the bottleneck. A team that wants "hit our on-prem SAP from Cloud Foundry and get the bytes back" can run this template with only the config files edited. A team that wants to decorate the call with typed validation, audit logging, or business logic adds a handler — the BTP plumbing underneath stays the same.
 
 > **Signpost.** First time here?
 > - Building a new endpoint on top of an existing fork → [Adding your service](#adding-your-service--the-80--case).
@@ -57,7 +63,7 @@ All per-deployment string values (app name, Go module path, CF subaccount coordi
 Recommended flow after forking:
 
 ```sh
-gh repo create my-org/my-app --template Hochfrequenz/go-sap-btp-cloud-foundry-mwe
+gh repo create my-org/my-app --template Hochfrequenz/go-sap-btp-cf-template
 cd my-app
 $EDITOR config.yml                            # adjust app.name, app.module, cf.* etc.
 
