@@ -90,10 +90,19 @@ func (s *Service) Authenticators() *AuthenticatorRegistry { return s.authenticat
 func (s *Service) CallOnPremise(ctx context.Context, destName, method, pathSuffix string, headers http.Header, body io.Reader) (*http.Response, error) {
 	// Reject traversal attempts at the edge: a user-supplied `..` in
 	// pathSuffix would otherwise travel unchanged into the on-prem URL,
-	// where SAP's HTTP stack may resolve it against the destination root
-	// and serve a resource the destination's author never meant to expose.
+	// where some SAP HTTP frontends resolve it against the destination
+	// root and serve a resource the destination's author never meant to
+	// expose. The same risk applies to percent-encoded variants
+	// (`%2e%2e`, mixed case, `%2e.`, …) because some frontends decode
+	// before applying path-resolution rules. Rather than chase decoder
+	// quirks, reject any `%` in pathSuffix outright — the current API
+	// surface only hands legitimate ASCII path segments to the Service;
+	// revisit if a real UTF-8-in-path use case ever turns up.
 	if strings.Contains(pathSuffix, "..") {
 		return nil, fmt.Errorf("path suffix %q contains '..'; traversal is not allowed", pathSuffix)
+	}
+	if strings.Contains(pathSuffix, "%") {
+		return nil, fmt.Errorf("path suffix %q contains '%%'; percent-encoded path segments are not allowed", pathSuffix)
 	}
 
 	destToken, err := s.tokens.Fetch(ctx, s.env.Dest.URL, s.env.Dest.ClientID, s.env.Dest.ClientSecret)

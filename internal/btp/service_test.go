@@ -348,6 +348,32 @@ func Test_Service_CallOnPremise_RejectsPathTraversal(t *testing.T) {
 	then.AssertThat(t, strings.Contains(err.Error(), "traversal"), is.True())
 }
 
+// Test_Service_CallOnPremise_RejectsPercentEncodedPath guards the second
+// half of the traversal defence. A literal `..` is easy to spot; what the
+// check must also stop are percent-encoded variants (`%2e%2e`, mixed case,
+// `%2e.`), because some SAP HTTP frontends decode before applying
+// path-resolution rules. Rather than chase decoder quirks we reject any
+// `%` in pathSuffix — these cases cover the common bypass shapes plus a
+// benign-looking space encoding that should also trip the guard.
+func Test_Service_CallOnPremise_RejectsPercentEncodedPath(t *testing.T) {
+	s := newBTPStack(t, `{"destinationConfiguration":{"URL":"http://x"}}`)
+	svc, err := btp.NewService(s.env)
+	then.AssertThat(t, err, is.Nil())
+
+	cases := []string{
+		"/foo/%2e%2e/bar",
+		"/foo/%2E%2E/bar",
+		"/foo/%2e./bar",
+		"/foo/%2e%2e%2fbar",
+		"/foo%20bar",
+	}
+	for _, suffix := range cases {
+		_, err := svc.CallOnPremise(context.Background(), "D", http.MethodGet, suffix, nil, nil)
+		then.AssertThat(t, err, is.Not(is.Nil()))
+		then.AssertThat(t, strings.Contains(err.Error(), "percent-encoded"), is.True())
+	}
+}
+
 func Test_Service_ProxyHandler_Returns502OnLookupFail(t *testing.T) {
 	s := newBTPStack(t, "placeholder")
 	s.dest.Close()
