@@ -7,6 +7,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -94,12 +95,24 @@ func main() {
 // deployments, but WARN is intentionally NOT mapped: this template does
 // not use that level (see README §"Logging — two levels, no warnings").
 func logLevelFromEnv() slog.Level {
-	switch strings.ToLower(os.Getenv("LOG_LEVEL")) {
+	raw := os.Getenv("LOG_LEVEL")
+	switch strings.ToLower(raw) {
+	case "":
+		return slog.LevelInfo
 	case "debug":
 		return slog.LevelDebug
+	case "info":
+		return slog.LevelInfo
 	case "error":
 		return slog.LevelError
 	default:
+		// Unknown value (including "warn", which is intentionally not
+		// mapped per README §"Logging"). Fall back to INFO and tell
+		// the operator on stderr so a typo or a misremembered setting
+		// does not silently pick a level the operator did not intend.
+		fmt.Fprintf(os.Stderr,
+			"LOG_LEVEL=%q ignored; use debug|info|error. See README §Logging.\n",
+			raw)
 		return slog.LevelInfo
 	}
 }

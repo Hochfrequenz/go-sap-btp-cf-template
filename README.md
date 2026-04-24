@@ -266,7 +266,7 @@ The split exists because putting `user_name` into the access log looks convenien
 
 The whole codebase runs on Dave Cheney's [two-levels discipline](https://dave.cheney.net/2015/11/05/lets-talk-about-logging). If you're coming from Java or ABAP, the rules are probably tighter than you're used to — deliberately.
 
-1. **Only two levels matter.** `INFO` is useful operational output. `DEBUG` is useful to a developer chasing a specific problem and is off by default in production. That's it.
+1. **Only two levels matter.** `INFO` is useful operational output. `DEBUG` is useful to a developer chasing a specific problem and is off by default in production. `ERROR` exists only as an output-filter knob (`LOG_LEVEL=error` for low-noise deployments), not as a level you ever *write* to — errors are returned, not logged (see rule 2).
 2. **Errors are not a log level.** An error is a return value. Handlers return it; only the boundary that cannot return any further (the HTTP response, or `main`) logs it. `btp.AbortError` is that boundary for HTTP responses — it writes the envelope and logs the underlying Go error once, server-side, with the request ID.
 3. **`WARN` doesn't exist in this repo.** If it's serious, handle it as an error. If it isn't, log `INFO`. "Something odd happened but I'm going to continue" is where warnings accumulate that nobody ever acts on — don't write those.
 4. **One access-log line per request.** Already wired in `cmd/server/main.go`'s `requestLog`; don't add "entering handler" / "leaving handler" lines on top. If a handler needs business-event context (e.g. `invoicesync` logs `user + company_code`), emit exactly one line per business event, not per middleware stage.
