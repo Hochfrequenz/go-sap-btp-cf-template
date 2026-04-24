@@ -375,15 +375,33 @@ func Test_Service_CallOnPremise_RejectsPercentEncodedPath(t *testing.T) {
 	}
 }
 
+// Test_NewService_ZeroOptionsFallBackToDefaults pins the explicit
+// "zero means default" semantics on ServiceOptions. Callers that
+// compose a struct-style options without knowing which fields to set
+// should still end up with the built-in timeouts and UA. Covers the
+// three fallback branches that a direct-call test cannot reach when
+// explicit WithX(...) values are passed.
+func Test_NewService_ZeroOptionsFallBackToDefaults(t *testing.T) {
+	s := newBTPStack(t, `{"destinationConfiguration":{"URL":"http://x"}}`)
+
+	svc, err := btp.NewService(s.env,
+		btp.WithUserAgent(""),
+		btp.WithMgmtTimeout(0),
+		btp.WithOnPremiseTimeout(0),
+	)
+	then.AssertThat(t, err, is.Nil())
+	then.AssertThat(t, svc != nil, is.True())
+}
+
 // Test_Service_CallOnPremise_WithUserAgentOverride pins the option-knob
 // half of issue #21: the template's default UA is a placeholder; forks
 // should set their own via btp.WithUserAgent so SAP-side traces can tell
 // callers apart.
 func Test_Service_CallOnPremise_WithUserAgentOverride(t *testing.T) {
-	s := newBTPStack(t, "placeholder")
-	s = newBTPStack(t, fmt.Sprintf(`{
+	first := newBTPStack(t, "placeholder")
+	s := newBTPStack(t, fmt.Sprintf(`{
 		"destinationConfiguration":{"Name":"D","Type":"HTTP","URL":%q,"Authentication":"NoAuthentication","ProxyType":"OnPremise"}
-	}`, s.onPrem.URL))
+	}`, first.onPrem.URL))
 
 	svc, err := btp.NewService(s.env, btp.WithUserAgent("my-service/v1.2.3"))
 	then.AssertThat(t, err, is.Nil())
@@ -405,8 +423,7 @@ func Test_Service_CallOnPremise_WithOnPremiseTimeout(t *testing.T) {
 	}))
 	defer slow.Close()
 
-	s := newBTPStack(t, "placeholder")
-	s = newBTPStack(t, fmt.Sprintf(`{
+	s := newBTPStack(t, fmt.Sprintf(`{
 		"destinationConfiguration":{"Name":"D","Type":"HTTP","URL":%q,"Authentication":"NoAuthentication","ProxyType":"OnPremise"}
 	}`, slow.URL))
 	// Redirect the stack's proxy to the slow server too, so the whole
