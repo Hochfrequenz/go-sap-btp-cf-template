@@ -9,18 +9,27 @@ applications:
   # Go backend — talks to the on-premise SAP system. Not meant to be hit
   # directly by end users; the approuter is the public entry point.
   #
-  # Classic CF go_buildpack does NOT auto-discover subpackages; GO_INSTALL_PACKAGE_SPEC
-  # tells it where main lives. The Procfile then runs the resulting `server` binary.
+  # We use binary_buildpack deliberately: the classic go_buildpack invokes
+  # the Go toolchain on the CF stager, which on eu10 OOMs with Go 1.26 +
+  # Gin 1.12 dep trees (see README §Deployment). Cross-compiling locally
+  # or in CI produces a static ./bin/server and the stager just launches
+  # it. The `command` below is what binary_buildpack runs on start.
+  #
+  # Build the binary before `cf push`:
+  #   make build-linux          # POSIX
+  #   scripts/build.ps1         # Windows PowerShell
+  # or the one-liner they wrap:
+  #   CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/server ./cmd/server
   - name: ((backend-host))
     path: .
     memory: 128M
     disk_quota: 256M
     instances: 1
     buildpacks:
-      - go_buildpack
+      - binary_buildpack
+    command: ./bin/server
     env:
       GIN_MODE: release
-      GO_INSTALL_PACKAGE_SPEC: ./cmd/server
     services:
       - go-xsuaa
       - go-dest

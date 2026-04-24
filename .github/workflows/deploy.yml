@@ -64,15 +64,14 @@ jobs:
           go-version: 1.26.x
 
       - name: Cross-compile static Linux/amd64 binary
-        # CGO_ENABLED=0 avoids a C toolchain dependency on the runner and
-        # produces a fully-static binary the binary_buildpack can launch
-        # with no glibc version coupling. Classic go_buildpack would try
-        # to recompile on the stager and has OOM'd there on eu10 — see
-        # #4 and the walkthrough's Stolpersteine list.
+        # CGO_ENABLED=0 avoids a C toolchain dependency on the runner
+        # and produces a fully-static binary the binary_buildpack
+        # launches with no glibc version coupling. Same one-liner that
+        # `make build-linux` runs locally — keep them in sync.
         run: |
           mkdir -p bin
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-            go build -tags cloudfoundry -o bin/server ./cmd/server
+            go build -o bin/server ./cmd/server
           file bin/server
           ls -lh bin/server
 
@@ -105,11 +104,9 @@ jobs:
           EOF
           cat vars.yml
 
-      - name: cf push — backend (binary_buildpack, no stager compile)
+      - name: cf push — backend (binary_buildpack, defined in manifest)
         run: |
-          cf push "$BACKEND_HOST" \
-            -f manifest.yml --vars-file vars.yml \
-            -b binary_buildpack -c './bin/server'
+          cf push "$BACKEND_HOST" -f manifest.yml --vars-file vars.yml
 
       - name: cf push — approuter (nodejs_buildpack per manifest)
         run: |
