@@ -16,6 +16,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 
 	"github.com/hochfrequenz/go-sap-btp-cloud-foundry-mwe/examples/invoicesync"
+	"github.com/hochfrequenz/go-sap-btp-cloud-foundry-mwe/internal/btp"
 )
 
 // fakeOnPrem is the canonical handler-test double: a one-method fake
@@ -129,12 +130,21 @@ func Test_Handler_RejectsInvalidPayloadBeforeTouchingSAP(t *testing.T) {
 	// Crucial: the fake was not called. Validation short-circuited
 	// before SAP could see a malformed payload.
 	then.AssertThat(t, fake.gotDest, is.EqualTo(""))
+
+	// Envelope shape: { "error": { "code": "invalid_request", "message": "..." } }.
+	// Validator messages are safe to surface, so we only pin code + presence
+	// of a non-empty message.
+	var env btp.ErrorEnvelope
+	then.AssertThat(t, json.Unmarshal(w.Body.Bytes(), &env), is.Nil())
+	then.AssertThat(t, env.Error.Code, is.EqualTo(btp.CodeInvalidRequest))
+	then.AssertThat(t, env.Error.Message != "", is.True())
 }
 
 func Test_Handler_SurfacesSAPErrorAs502(t *testing.T) {
 	// When svc.CallOnPremise returns an error (e.g. the on-prem system
-	// is unreachable), the handler should surface a 502 with the error
-	// as message — not a 500.
+	// is unreachable), the handler should surface a 502 with a stable
+	// envelope — and crucially, it must NOT leak the underlying Go
+	// error text to the client.
 	fake := &fakeOnPrem{err: errors.New("on-prem system unreachable")}
 	r := newRouter(fake)
 
@@ -145,5 +155,15 @@ func Test_Handler_SurfacesSAPErrorAs502(t *testing.T) {
 	r.ServeHTTP(w, req)
 
 	then.AssertThat(t, w.Code, is.EqualTo(http.StatusBadGateway))
-	then.AssertThat(t, strings.Contains(w.Body.String(), "unreachable"), is.True())
+
+	// Typed envelope, stable code, stable message.
+	var env btp.ErrorEnvelope
+	then.AssertThat(t, json.Unmarshal(w.Body.Bytes(), &env), is.Nil())
+	then.AssertThat(t, env.Error.Code, is.EqualTo(btp.CodeUpstreamUnreachable))
+	then.AssertThat(t, env.Error.Message, is.EqualTo("on-premise call failed"))
+
+	// No leakage: the raw Go error text must never appear in the
+	// response body. This is the whole point of the envelope helper.
+	then.AssertThat(t, strings.Contains(w.Body.String(), "on-prem system unreachable"),
+		is.False())
 }

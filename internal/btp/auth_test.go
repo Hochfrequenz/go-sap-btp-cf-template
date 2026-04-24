@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"math/big"
@@ -190,6 +191,13 @@ func Test_Middleware_Rejects_MissingBearer(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	then.AssertThat(t, w.Code, is.EqualTo(http.StatusUnauthorized))
+
+	// Symmetry with Test_Middleware_Rejects_Malformed: pin the envelope
+	// shape on the no-bearer branch too.
+	var env btp.ErrorEnvelope
+	then.AssertThat(t, json.Unmarshal(w.Body.Bytes(), &env), is.Nil())
+	then.AssertThat(t, env.Error.Code, is.EqualTo(btp.CodeUnauthorized))
+	then.AssertThat(t, env.Error.Message, is.EqualTo("missing bearer token"))
 }
 
 func Test_Middleware_Rejects_Malformed(t *testing.T) {
@@ -206,6 +214,17 @@ func Test_Middleware_Rejects_Malformed(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	then.AssertThat(t, w.Code, is.EqualTo(http.StatusUnauthorized))
+
+	// Envelope shape for the "invalid token" branch. The raw jwt/keyfunc
+	// error must NOT appear in the response body — only a stable message
+	// behind the typed code.
+	var env btp.ErrorEnvelope
+	then.AssertThat(t, json.Unmarshal(w.Body.Bytes(), &env), is.Nil())
+	then.AssertThat(t, env.Error.Code, is.EqualTo(btp.CodeUnauthorized))
+	then.AssertThat(t, env.Error.Message, is.EqualTo("invalid or expired token"))
+	// jwt/v5 library internals should never leak.
+	then.AssertThat(t, strings.Contains(w.Body.String(), "token is malformed"),
+		is.False())
 }
 
 func Test_Middleware_AcceptsAndStashesToken(t *testing.T) {

@@ -60,10 +60,14 @@ func Handler(svc btp.OnPremCaller) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// Bind + validate the request body. Struct tags do the heavy
 		// lifting; a bad payload fails here with a 400 and never
-		// reaches the SAP system.
+		// reaches the SAP system. Validator messages from
+		// go-playground/validator are safe to surface to the client,
+		// so we pass err.Error() as the user-facing message — rare
+		// case where including the underlying text is the right call.
 		var req Request
 		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			btp.AbortError(c, http.StatusBadRequest, btp.CodeInvalidRequest,
+				err.Error(), nil)
 			return
 		}
 
@@ -89,7 +93,11 @@ func Handler(svc btp.OnPremCaller) gin.HandlerFunc {
 			bytes.NewReader(body),
 		)
 		if err != nil {
-			c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+			// Upstream (SAP / Cloud Connector) failures are logged with
+			// full detail on the server side; the client just sees a
+			// stable "upstream_unreachable" code and can retry on that.
+			btp.AbortError(c, http.StatusBadGateway, btp.CodeUpstreamUnreachable,
+				"on-premise call failed", err)
 			return
 		}
 		defer func() { _ = resp.Body.Close() }()
