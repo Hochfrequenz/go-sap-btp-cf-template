@@ -37,8 +37,8 @@ type csrfSAPServer struct {
 	fetchPath      string
 	fetchHits      atomic.Int32
 	mutatingHits   atomic.Int32
-	lastMutatingCk string // the cookies the mutating call carried
-	lastMutatingTk string // the token the mutating call carried
+	lastMutatingCk string       // the cookies the mutating call carried
+	lastMutatingTk string       // the token the mutating call carried
 	currentToken   atomic.Value // string — swapped to simulate server-side session recycle
 }
 
