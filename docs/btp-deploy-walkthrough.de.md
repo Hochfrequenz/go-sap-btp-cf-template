@@ -3,10 +3,8 @@
 Dieses Dokument protokolliert chronologisch, was beim ersten realen Deploy des MWE nach SAP BTP Cloud Foundry getan wurde — inklusive Klicks im Cockpit, ausgeführter Shell-Kommandos und getroffener Entscheidungen.
 Ziel: Ein:e andere:r Entwickler:in kann den Ablauf auf einer ähnlichen Umgebung (Windows 11, neues BTP-Konto) eins-zu-eins nachvollziehen.
 
-Die autoritative Checkliste liegt in [Issue #4](https://github.com/Hochfrequenz/go-sap-btp-cloud-foundry-mwe/issues/4).
+Die autoritative Checkliste liegt in [Issue #4](https://github.com/Hochfrequenz/go-sap-btp-cf-template/issues/4).
 Dieses Walkthrough ergänzt sie um reale URLs, tatsächlich beobachtete Cockpit-Labels und Abweichungen.
-
-> **Hinweis zum Repo-Namen.** Das Repo heißt seit April 2026 `go-sap-btp-cf-template` (PR [#41](https://github.com/Hochfrequenz/go-sap-btp-cf-template/pull/41)). Die historischen PR-/Issue-Links in diesem Protokoll zeigen auf den ursprünglichen Namen `go-sap-btp-cloud-foundry-mwe` — GitHub leitet diese URLs automatisch auf den aktuellen Namen weiter, aber der Wortlaut ist bewusst nicht umgeschrieben, damit die Chronologie ehrlich bleibt.
 
 ---
 
@@ -348,7 +346,7 @@ Die Auto-Erkennung von `cmd/server` ist eine **Paketo-spezifische Eigenschaft** 
 Der bisherige Kommentar in `manifest.yml` und die README hatten das falsch dargestellt.
 
 **Fix:** `GO_INSTALL_PACKAGE_SPEC: ./cmd/server` als `env:` auf der Backend-App setzen.
-Der zugehörige PR ist [#8](https://github.com/Hochfrequenz/go-sap-btp-cloud-foundry-mwe/pull/8).
+Der zugehörige PR ist [#8](https://github.com/Hochfrequenz/go-sap-btp-cf-template/pull/8).
 
 ### 5.3  Beobachtung zu Go-Versionen (kein Fehler, aber Risiko)
 
@@ -438,7 +436,7 @@ Ergebnis:
 | `aud` | `xsuaa.XSAppName` — `go-btp-mwe!t7878` | `["openid", "sb-go-btp-mwe!t7878"]` (= `ClientID`) |
 | `iss` | `trimSlash(xsuaa.URL)` — `https://hf-cf.authentication.eu10.hana.ondemand.com` | `http://hf-cf.localhost:8080/uaa/oauth/token` — ein SAP-internes Literal, nicht aus `VCAP_SERVICES` ableitbar |
 
-Fix in [PR #11](https://github.com/Hochfrequenz/go-sap-btp-cloud-foundry-mwe/pull/11): `jwt.WithAudience(xsuaa.ClientID)` und `WithIssuer` ganz fallen lassen.
+Fix in [PR #11](https://github.com/Hochfrequenz/go-sap-btp-cf-template/pull/11): `jwt.WithAudience(xsuaa.ClientID)` und `WithIssuer` ganz fallen lassen.
 Sicherheit bleibt erhalten, weil die JWKS-URL aus dem gebundenen `xsuaa.URL` abgeleitet wird — ein Token aus einem fremden XSUAA-Tenant scheitert schon an der Signaturprüfung.
 
 ### 6.3  Phase 5 — vollständiger Smoke durch alle drei Layer
@@ -476,7 +474,7 @@ cf push go-btp-mwe -f manifest.yml --vars-file vars.yml -b binary_buildpack -c '
 
 Die `manifest.yml` zeigte zum Zeitpunkt dieses Deploys weiterhin auf `go_buildpack` — d. h. der nächste blanke `cf push` wäre wieder am Stager gescheitert.
 
-> **Seither (PR [#32](https://github.com/Hochfrequenz/go-sap-btp-cloud-foundry-mwe/pull/32))** ist die `manifest.yml` dauerhaft auf `binary_buildpack` mit `command: ./bin/server` umgestellt; der Build läuft per `make build-linux` bzw. `scripts\build.ps1`, und die CD-Pipeline macht dasselbe. Ein blanker `cf push` funktioniert jetzt ohne `-b` / `-c`-Override — solange `./bin/server` vorher gebaut wurde.
+> **Seither (PR [#32](https://github.com/Hochfrequenz/go-sap-btp-cf-template/pull/32))** ist die `manifest.yml` dauerhaft auf `binary_buildpack` mit `command: ./bin/server` umgestellt; der Build läuft per `make build-linux` bzw. `scripts\build.ps1`, und die CD-Pipeline macht dasselbe. Ein blanker `cf push` funktioniert jetzt ohne `-b` / `-c`-Override — solange `./bin/server` vorher gebaut wurde.
 
 ---
 
@@ -514,8 +512,8 @@ Die folgenden Punkte sind bei einer Reproduktion auf einer leeren Windows-Entwic
 
 Dieses Walkthrough ist als chronologisches Protokoll bewusst nicht umgeschrieben worden, aber die folgenden Punkte aus der "Stolpersteine"-Liste sind in späteren PRs adressiert worden und gelten heute nicht mehr wie hier beschrieben:
 
-- **`go_buildpack` ist nicht mehr der Default** (PR [#32](https://github.com/Hochfrequenz/go-sap-btp-cloud-foundry-mwe/pull/32)) — `manifest.yml` verwendet `binary_buildpack` + `command: ./bin/server`; `make build-linux` / `scripts\build.ps1` bauen die Linux-Binary.
-- **CSRF / POST-Handshake ist eingebaut** (PR [#38](https://github.com/Hochfrequenz/go-sap-btp-cloud-foundry-mwe/pull/38)) — `svc.CallOnPremiseMutating` macht Fetch → Attach → Retry transparent; der transparente `/api/sap/:destination/*path`-Proxy routet POST / PUT / DELETE / PATCH automatisch durch. ADT-Beispiel: `examples/adtcheckrun/`.
+- **`go_buildpack` ist nicht mehr der Default** (PR [#32](https://github.com/Hochfrequenz/go-sap-btp-cf-template/pull/32)) — `manifest.yml` verwendet `binary_buildpack` + `command: ./bin/server`; `make build-linux` / `scripts\build.ps1` bauen die Linux-Binary.
+- **CSRF / POST-Handshake ist eingebaut** (PR [#38](https://github.com/Hochfrequenz/go-sap-btp-cf-template/pull/38)) — `svc.CallOnPremiseMutating` macht Fetch → Attach → Retry transparent; der transparente `/api/sap/:destination/*path`-Proxy routet POST / PUT / DELETE / PATCH automatisch durch. ADT-Beispiel: `examples/adtcheckrun/`.
 - **CD-Pipeline läuft** (`.github/workflows/deploy.yml`) — getriggert durch Release-Publishing, baut lokal, pusht, curlt `/healthz` als Smoke-Test.
-- **Typisierter API-Error-Envelope** (PR [#29](https://github.com/Hochfrequenz/go-sap-btp-cloud-foundry-mwe/pull/29)) — kein `err.Error()`-Leak mehr in Responses; `btp.AbortError` ist der einzige gesegnete Writer.
-- **RequestID + RequireScope-Middleware** (PR [#31](https://github.com/Hochfrequenz/go-sap-btp-cloud-foundry-mwe/pull/31)) — Access-Log ohne PII / Claims; Envelope trägt die Request-ID.
+- **Typisierter API-Error-Envelope** (PR [#29](https://github.com/Hochfrequenz/go-sap-btp-cf-template/pull/29)) — kein `err.Error()`-Leak mehr in Responses; `btp.AbortError` ist der einzige gesegnete Writer.
+- **RequestID + RequireScope-Middleware** (PR [#31](https://github.com/Hochfrequenz/go-sap-btp-cf-template/pull/31)) — Access-Log ohne PII / Claims; Envelope trägt die Request-ID.
