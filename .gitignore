@@ -25,3 +25,8 @@ bin/
 
 # Local CF-push variables (copied from vars.example.yml, holds per-deploy values)
 vars.yml
+
+# Claude Code session-management / local-settings tooling. Not sensitive
+# today, but the directory's contents are evolving and should never be
+# accidentally staged via `git add -A`.
+.claude/
