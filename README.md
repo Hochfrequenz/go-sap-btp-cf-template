@@ -762,20 +762,20 @@ A request that fans out to a legacy on-prem SAP system can sit on the wire for m
 | ------------------- | ------- | ----------------------------------------------------------------------------- |
 | `ReadHeaderTimeout` | 10 s    | Slowloris on request headers.                                                 |
 | `ReadTimeout`       | 60 s    | Slow-body POSTs (client → server). Request bodies are small JSON.             |
-| `WriteTimeout`      | 600 s   | Bounds total handler runtime — `WriteTimeout` starts at header-read, not at first write. Sized for an on-prem SAP system that is usually slow under load (ADT through CSRF + Cloud Connector regularly takes minutes; observed worst case is ~5 minutes). |
+| `WriteTimeout`      | 900 s   | Bounds *total* handler runtime — `WriteTimeout` starts at header-read, not at first write, and covers the CSRF handshake + main on-prem call + response write as one budget. Deliberately 5 min larger than `DefaultOnPremiseTimeout` so the on-prem layer reliably fires first on slow SAP. |
 | `IdleTimeout`       | 120 s   | Keep-alive sockets parked indefinitely.                                       |
 
 **On-prem HTTP client (`btp.DefaultOnPremiseTimeout`):**
 
 | Setting                    | Default | Why                                                                  |
 | -------------------------- | ------- | -------------------------------------------------------------------- |
-| `DefaultOnPremiseTimeout`  | 600 s   | Per-call timeout on `*btp.Service`'s on-prem `*http.Client`. Aligned with `WriteTimeout` so neither fires before the other. Override per-instance with `btp.WithOnPremiseTimeout(...)` when the fork's SAP is reliably faster. |
+| `DefaultOnPremiseTimeout`  | 600 s   | Per-call timeout on `*btp.Service`'s on-prem `*http.Client`. ADT-through-CC calls regularly take minutes; observed worst case ~5 minutes. 10 minutes is the per-call ceiling. Override per-instance with `btp.WithOnPremiseTimeout(...)` when the fork's SAP is reliably faster. |
 
-The two values are deliberately equal: the on-prem client timeout would fire first on a slow SAP and surface as a clean error envelope; setting `WriteTimeout` lower would let the server-side timeout race the client-side one for the same condition.
+The two values are intentionally **asymmetric**: `WriteTimeout` (one budget for the whole handler) sits 5 min above `DefaultOnPremiseTimeout` (one budget per on-prem call). On a CSRF mutating route — `HEAD/GET` for the token, then `POST` — each leg gets its own 10-min on-prem budget; the 15-min `WriteTimeout` covers both legs plus response write without racing the on-prem timeout. Result: a hung SAP always surfaces as a clean `upstream_unreachable` envelope from the on-prem layer, never as a server-side write timeout.
 
-**CF Gorouter (deployment-managed):** The CF route layer has its own per-request timeout (typically ~900 s, varies by foundation/landscape). It bounds *both* of the above. If a fork legitimately needs longer than the route allows, raising the values here is moot — the platform owner has to extend the route timeout.
+**CF Gorouter (deployment-managed):** The CF route layer has its own per-request timeout (typically ~900 s, varies by foundation/landscape). It bounds *both* of the above — the 900 s `WriteTimeout` is intentionally aligned with that ceiling. If a fork legitimately needs longer than the route allows, raising the values here is moot — the platform owner has to extend the route timeout.
 
-If a single handler legitimately needs longer than 600 s — large-file streaming, long-poll, exceptionally slow batch — override per-request with `http.NewResponseController(w).SetWriteDeadline(...)` (server side) **and** wrap the on-prem client (or pass a different `WithOnPremiseTimeout` to a dedicated `*btp.Service` instance for that route). Loosening the global defaults re-opens the slow-client surface for every other route.
+If a single handler legitimately needs longer than 900 s — large-file streaming, long-poll, exceptionally slow batch — override per-request with `http.NewResponseController(w).SetWriteDeadline(...)` (server side) **and** wrap the on-prem client (or pass a different `WithOnPremiseTimeout` to a dedicated `*btp.Service` instance for that route). Loosening the global defaults re-opens the slow-client surface for every other route.
 
 ## What this MWE deliberately does *not* do
 

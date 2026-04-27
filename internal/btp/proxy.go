@@ -98,6 +98,10 @@ func (t *onPremiseRoundTripper) RoundTrip(req *http.Request) (*http.Response, er
 // genuinely hung. Override per-instance with [WithOnPremiseTimeout] when a
 // fork's SAP system is reliably faster.
 //
-// Pairs with cmd/server/main.go's WriteTimeout: setting either materially
-// lower than this re-introduces the slow-SAP cliff at that layer.
+// Pairs with — but stays strictly *under* — cmd/server/main.go's
+// WriteTimeout (15 min). The asymmetry is deliberate: this per-call budget
+// fires first on a hung SAP and surfaces a clean upstream_unreachable
+// envelope; setting it equal to or larger than WriteTimeout would let the
+// server-side timeout race this one and produce a less-helpful failure
+// mode. If a fork raises this value, raise WriteTimeout proportionally.
 const DefaultOnPremiseTimeout = 10 * time.Minute

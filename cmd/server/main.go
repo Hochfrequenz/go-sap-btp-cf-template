@@ -62,7 +62,7 @@ func main() {
 	//
 	//   - ReadHeaderTimeout (10s):  Slowloris on request headers.
 	//   - ReadTimeout       (60s):  Slow-body POSTs (client → server).
-	//   - WriteTimeout     (600s):  Bounds total handler runtime, since
+	//   - WriteTimeout     (900s):  Bounds total handler runtime, since
 	//                               Go starts WriteTimeout at header-read,
 	//                               not at first write.
 	//   - IdleTimeout      (120s):  Keep-alive sockets parked indefinitely.
@@ -70,16 +70,25 @@ func main() {
 	// WriteTimeout is sized for an on-prem SAP system that is usually
 	// slow under load. An ADT call routed through the Cloud Connector +
 	// CSRF handshake regularly takes minutes, and observed worst case is
-	// ~5 minutes. 600s (10 minutes) leaves comfortable margin for the
-	// "usual" slow-but-completing call without normalising calls that are
-	// genuinely hung — values much higher than this should be a per-route
-	// per-request override (see below), not a global default.
+	// ~5 minutes per leg.
 	//
-	// Paired with btp.DefaultOnPremiseTimeout (also 10m). The two close
-	// the slow-SAP cliff together: the on-prem client surfaces a clean
-	// timeout error to the handler if SAP is hung, and WriteTimeout
-	// catches the (hopefully unreachable) case where the handler itself
-	// stalls without making the on-prem call.
+	// 900s (15 minutes) is intentionally HIGHER than the 10-minute
+	// btp.DefaultOnPremiseTimeout. WriteTimeout is one budget covering
+	// the *whole* handler run (CSRF handshake leg + main on-prem POST +
+	// response write); the on-prem client timeout is a budget per call.
+	// Setting WriteTimeout = on-prem-timeout would let WriteTimeout race
+	// the on-prem timeout under CSRF — sometimes producing a clean
+	// upstream-unreachable envelope, sometimes a server-side timeout.
+	// 900s gives 5 minutes of headroom over a single full-budget on-prem
+	// call so the on-prem timeout reliably fires first and the client
+	// sees one stable failure mode. The 900s also lines up with most CF
+	// Gorouter request-timeout defaults, so values above this are moot
+	// without platform-side changes.
+	//
+	// WriteTimeout is the only inner cap; if it's reached, that means
+	// the handler genuinely stalled or made multiple consecutive
+	// long-running on-prem calls — both pathological enough that
+	// timing out is the right answer.
 	//
 	// ReadTimeout stays at 60s because it bounds *client → server* body
 	// transfer; the request bodies the template ships are small JSON, and
@@ -95,7 +104,7 @@ func main() {
 		Handler:           r,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       60 * time.Second,
-		WriteTimeout:      600 * time.Second,
+		WriteTimeout:      900 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
 
