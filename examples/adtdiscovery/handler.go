@@ -28,11 +28,13 @@
 package adtdiscovery
 
 import (
+	"context"
 	"encoding/xml"
 	"io"
+	"log/slog"
 	"net/http"
 
-	"github.com/gin-gonic/gin"
+	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/hochfrequenz/go-sap-btp-cf-template/internal/btp"
 )
@@ -60,20 +62,48 @@ type Collection struct {
 	Href  string `json:"href"`
 }
 
-// Register attaches GET /adt-discovery to the JWT-guarded api
-// group. The destination name and SAP path are closed over in the
-// handler so the route is not path-parameterised — that's the
-// whole point of the constrained-proxy pattern.
-func Register(api *gin.RouterGroup, svc btp.OnPremCaller) {
-	api.GET("/adt-discovery", Handler(svc))
+// DiscoveryInput is the (empty) input shape huma binds to. GET
+// /adt-discovery takes no body, no query, and no path parameters; the
+// destination name and SAP path are baked into the handler. Keeping
+// the type makes the OpenAPI spec generation trivial and matches
+// huma's handler signature.
+type DiscoveryInput struct{}
+
+// DiscoveryOutput wraps the JSON body huma writes to the client. The
+// embedded `Body` field is huma's convention for "this is the response
+// payload, not a header". The OpenAPI schema is derived from
+// Response's struct tags — no annotation comments, no manual spec.
+type DiscoveryOutput struct {
+	Body Response
+}
+
+// Register attaches GET /adt-discovery to the huma API. The
+// destination name and SAP path are closed over in the handler so the
+// route is not path-parameterised — that's the constrained-proxy
+// pattern. huma generates the OpenAPI operation, request/response
+// schemas, and the Swagger UI entry from the function signature
+// alone.
+func Register(api huma.API, svc btp.OnPremCaller) {
+	huma.Register(api, huma.Operation{
+		OperationID: "adt-discovery",
+		Method:      http.MethodGet,
+		Path:        "/adt-discovery",
+		Summary:     "List ADT workspaces and collections",
+		Description: "Calls SAP's /sap/bc/adt/discovery on the configured " +
+			"destination, parses the ATOM service document, and returns a " +
+			"compact typed JSON view of workspaces + their collections.",
+		Tags: []string{"adt"},
+	}, Handler(svc))
 }
 
 // Handler calls the configured destination's /sap/bc/adt/discovery,
-// parses the ATOM service XML, and returns a compact typed JSON
-// view. Fatal on XML parse failure — a well-formed SAP response
-// is a prerequisite for the three-leg call to be considered
-// working at all.
-func Handler(svc btp.OnPremCaller) gin.HandlerFunc {
+// parses the ATOM service XML, and returns a compact typed JSON view.
+// Fatal on XML parse failure — a well-formed SAP response is a
+// prerequisite for the three-leg call to be considered working at
+// all. Errors surface as huma's status-typed errors (502 with the
+// huma error model); the SAP-side Go error is captured for
+// operator-side context.
+func Handler(svc btp.OnPremCaller) func(context.Context, *DiscoveryInput) (*DiscoveryOutput, error) {
 	// FORK: "HF_S4" is the name of Hochfrequenz's on-prem destination.
 	// Change it to the destination name you configured in your BTP
 	// subaccount. The SAP path /sap/bc/adt/discovery is standard
@@ -83,37 +113,38 @@ func Handler(svc btp.OnPremCaller) gin.HandlerFunc {
 		sapPath         = "/sap/bc/adt/discovery"
 	)
 
-	return func(c *gin.Context) {
-		resp, err := svc.CallOnPremise(c.Request.Context(),
+	return func(ctx context.Context, _ *DiscoveryInput) (*DiscoveryOutput, error) {
+		resp, err := svc.CallOnPremise(ctx,
 			destinationName, http.MethodGet, sapPath, nil, nil)
 		if err != nil {
-			btp.AbortError(c, http.StatusBadGateway, btp.CodeUpstreamUnreachable,
-				"on-premise call failed", err)
-			return
+			// huma's default NewError attaches `errs[].Error()` to the
+			// response body — which would leak the underlying Go error
+			// text to the client. Log it server-side (operator context),
+			// surface only the safe user-message (client contract).
+			slog.ErrorContext(ctx, "adt-discovery on-premise call failed", "err", err)
+			return nil, huma.Error502BadGateway("on-premise call failed")
 		}
 		defer func() { _ = resp.Body.Close() }()
 
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			btp.AbortError(c, http.StatusBadGateway, btp.CodeUpstreamUnreachable,
-				"on-premise call returned non-2xx", nil)
-			return
+			slog.ErrorContext(ctx, "adt-discovery on-premise non-2xx",
+				"status", resp.StatusCode)
+			return nil, huma.Error502BadGateway("on-premise call returned non-2xx")
 		}
 
 		raw, err := io.ReadAll(resp.Body)
 		if err != nil {
-			btp.AbortError(c, http.StatusBadGateway, btp.CodeUpstreamUnreachable,
-				"reading on-premise response body failed", err)
-			return
+			slog.ErrorContext(ctx, "adt-discovery body read failed", "err", err)
+			return nil, huma.Error502BadGateway("reading on-premise response body failed")
 		}
 
 		var svcDoc atomService
 		if err := xml.Unmarshal(raw, &svcDoc); err != nil {
-			btp.AbortError(c, http.StatusBadGateway, btp.CodeUpstreamUnreachable,
-				"parsing on-premise ATOM service document failed", err)
-			return
+			slog.ErrorContext(ctx, "adt-discovery xml parse failed", "err", err)
+			return nil, huma.Error502BadGateway("parsing on-premise ATOM service document failed")
 		}
 
-		c.JSON(http.StatusOK, toResponse(svcDoc))
+		return &DiscoveryOutput{Body: toResponse(svcDoc)}, nil
 	}
 }
 
