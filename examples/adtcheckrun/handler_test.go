@@ -96,6 +96,8 @@ const sapCheckrunXMLNotProcessed = `<?xml version="1.0" encoding="utf-8"?>
       chkrun:statusText="Resource CLASS CL_ABAP_SYNTAX does not exist."/>
 </chkrun:checkRunReports>`
 
+const reqBodyAbapSyntaxClass = `{"object_uri":"/sap/bc/adt/oo/classes/cl_abap_syntax"}`
+
 func Test_Handler_ParsesXMLIntoTypedJSON(t *testing.T) {
 	fake := &fakeMutator{
 		resp: &http.Response{
@@ -155,8 +157,7 @@ func Test_Handler_HandlesStatusOnlyReport(t *testing.T) {
 	}
 	r := newRouter(fake)
 
-	body := `{"object_uri":"/sap/bc/adt/oo/classes/cl_abap_syntax"}`
-	req := httptest.NewRequest(http.MethodPost, "/adt-checkrun", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/adt-checkrun", strings.NewReader(reqBodyAbapSyntaxClass))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -180,8 +181,7 @@ func Test_Handler_SendsCorrectADTRequest(t *testing.T) {
 	}
 	r := newRouter(fake)
 
-	body := `{"object_uri":"/sap/bc/adt/oo/classes/cl_abap_syntax"}`
-	req := httptest.NewRequest(http.MethodPost, "/adt-checkrun", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/adt-checkrun", strings.NewReader(reqBodyAbapSyntaxClass))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -220,8 +220,7 @@ func Test_Handler_SurfacesUpstreamErrorAs502(t *testing.T) {
 	fake := &fakeMutator{err: errors.New("on-prem system unreachable")}
 	r := newRouter(fake)
 
-	body := `{"object_uri":"/sap/bc/adt/oo/classes/cl_abap_syntax"}`
-	req := httptest.NewRequest(http.MethodPost, "/adt-checkrun", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/adt-checkrun", strings.NewReader(reqBodyAbapSyntaxClass))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -257,4 +256,113 @@ func Test_Handler_SurfacesBadSAPResponseAs502(t *testing.T) {
 	var env btp.ErrorEnvelope
 	then.AssertThat(t, json.Unmarshal(w.Body.Bytes(), &env), is.Nil())
 	then.AssertThat(t, env.Error.Code, is.EqualTo(btp.CodeUpstreamUnreachable))
+}
+
+func Test_Handler_SurfacesNon2xxAs502(t *testing.T) {
+	fake := &fakeMutator{
+		resp: &http.Response{
+			StatusCode:    http.StatusInternalServerError,
+			Body:          io.NopCloser(strings.NewReader("")),
+			ContentLength: -1,
+		},
+	}
+	r := newRouter(fake)
+
+	req := httptest.NewRequest(http.MethodPost, "/adt-checkrun", strings.NewReader(reqBodyAbapSyntaxClass))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	then.AssertThat(t, w.Code, is.EqualTo(http.StatusBadGateway))
+	var env btp.ErrorEnvelope
+	then.AssertThat(t, json.Unmarshal(w.Body.Bytes(), &env), is.Nil())
+	then.AssertThat(t, env.Error.Code, is.EqualTo(btp.CodeUpstreamUnreachable))
+}
+
+// errReader returns a controlled error from Read so we can exercise
+// the io.ReadAll failure branch in the handler.
+type errReader struct{ err error }
+
+func (e errReader) Read(_ []byte) (int, error) { return 0, e.err }
+
+func Test_Handler_SurfacesBodyReadErrorAs502(t *testing.T) {
+	fake := &fakeMutator{
+		resp: &http.Response{
+			StatusCode:    http.StatusOK,
+			Body:          io.NopCloser(errReader{err: errors.New("read failed")}),
+			ContentLength: -1,
+		},
+	}
+	r := newRouter(fake)
+
+	req := httptest.NewRequest(http.MethodPost, "/adt-checkrun", strings.NewReader(reqBodyAbapSyntaxClass))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	then.AssertThat(t, w.Code, is.EqualTo(http.StatusBadGateway))
+	var env btp.ErrorEnvelope
+	then.AssertThat(t, json.Unmarshal(w.Body.Bytes(), &env), is.Nil())
+	then.AssertThat(t, env.Error.Code, is.EqualTo(btp.CodeUpstreamUnreachable))
+}
+
+// Test_Register_AttachesPOSTRoute proves Register wires the route
+// onto a JWT-guarded api group. We use the constructed router rather
+// than calling Handler directly so the Register code path is covered.
+func Test_Register_AttachesPOSTRoute(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(stubJWTClaims(jwt.MapClaims{"user_name": "u@example"}))
+	api := r.Group("/api")
+	fake := &fakeMutator{
+		resp: &http.Response{
+			StatusCode:    http.StatusOK,
+			Body:          io.NopCloser(strings.NewReader(sapCheckrunXMLNotProcessed)),
+			ContentLength: -1,
+		},
+	}
+	adtcheckrun.Register(api, fake)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/adt-checkrun", strings.NewReader(reqBodyAbapSyntaxClass))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	then.AssertThat(t, w.Code, is.EqualTo(http.StatusOK))
+}
+
+// Test_Handler_HandlesMessageWithoutPositionFragment exercises the
+// parseMessagePosition no-fragment branch (URI without `#start=`).
+func Test_Handler_HandlesMessageWithoutPositionFragment(t *testing.T) {
+	const xmlNoFragment = `<?xml version="1.0" encoding="utf-8"?>
+<chkrun:checkRunReports xmlns:chkrun="http://www.sap.com/adt/checkrun">
+  <chkrun:checkReport chkrun:reporter="abapCheckRun"
+      chkrun:triggeringUri="/sap/bc/adt/oo/classes/cl_x/source/main"
+      chkrun:status="processed">
+    <chkrun:checkMessageList>
+      <chkrun:checkMessage uri="/sap/bc/adt/oo/classes/cl_x/source/main"
+          type="I" shortText="No issues found"/>
+    </chkrun:checkMessageList>
+  </chkrun:checkReport>
+</chkrun:checkRunReports>`
+	fake := &fakeMutator{
+		resp: &http.Response{
+			StatusCode:    http.StatusOK,
+			Body:          io.NopCloser(strings.NewReader(xmlNoFragment)),
+			ContentLength: -1,
+		},
+	}
+	r := newRouter(fake)
+
+	req := httptest.NewRequest(http.MethodPost, "/adt-checkrun", strings.NewReader(reqBodyAbapSyntaxClass))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	then.AssertThat(t, w.Code, is.EqualTo(http.StatusOK))
+	var resp adtcheckrun.Response
+	then.AssertThat(t, json.Unmarshal(w.Body.Bytes(), &resp), is.Nil())
+	then.AssertThat(t, len(resp.Reports[0].Messages), is.EqualTo(1))
+	then.AssertThat(t, resp.Reports[0].Messages[0].Line, is.EqualTo(0))
+	then.AssertThat(t, resp.Reports[0].Messages[0].Column, is.EqualTo(0))
 }

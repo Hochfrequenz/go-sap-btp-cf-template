@@ -165,3 +165,68 @@ func Test_Handler_SurfacesMalformedXMLAs502(t *testing.T) {
 	then.AssertThat(t, json.Unmarshal(w.Body.Bytes(), &env), is.Nil())
 	then.AssertThat(t, env.Error.Code, is.EqualTo(btp.CodeUpstreamUnreachable))
 }
+
+func Test_Handler_SurfacesNon2xxAs502(t *testing.T) {
+	fake := &fakeCaller{
+		resp: &http.Response{
+			StatusCode: http.StatusInternalServerError,
+			Body:       io.NopCloser(strings.NewReader("")),
+		},
+	}
+	r := newRouter(fake)
+
+	req := httptest.NewRequest(http.MethodGet, "/adt-discovery", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	then.AssertThat(t, w.Code, is.EqualTo(http.StatusBadGateway))
+	var env btp.ErrorEnvelope
+	then.AssertThat(t, json.Unmarshal(w.Body.Bytes(), &env), is.Nil())
+	then.AssertThat(t, env.Error.Code, is.EqualTo(btp.CodeUpstreamUnreachable))
+}
+
+// errReader returns a controlled error from Read so the io.ReadAll
+// failure branch in the handler is exercised.
+type errReader struct{ err error }
+
+func (e errReader) Read(_ []byte) (int, error) { return 0, e.err }
+
+func Test_Handler_SurfacesBodyReadErrorAs502(t *testing.T) {
+	fake := &fakeCaller{
+		resp: &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(errReader{err: errors.New("read failed")}),
+		},
+	}
+	r := newRouter(fake)
+
+	req := httptest.NewRequest(http.MethodGet, "/adt-discovery", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	then.AssertThat(t, w.Code, is.EqualTo(http.StatusBadGateway))
+	var env btp.ErrorEnvelope
+	then.AssertThat(t, json.Unmarshal(w.Body.Bytes(), &env), is.Nil())
+	then.AssertThat(t, env.Error.Code, is.EqualTo(btp.CodeUpstreamUnreachable))
+}
+
+func Test_Register_AttachesGETRoute(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(stubJWTClaims(jwt.MapClaims{"user_name": "u@example"}))
+	api := r.Group("/api")
+	fake := &fakeCaller{
+		resp: &http.Response{
+			StatusCode:    http.StatusOK,
+			Body:          io.NopCloser(strings.NewReader(sapDiscoveryXML)),
+			ContentLength: -1,
+		},
+	}
+	adtdiscovery.Register(api, fake)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/adt-discovery", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	then.AssertThat(t, w.Code, is.EqualTo(http.StatusOK))
+}
