@@ -57,12 +57,13 @@ type OnPremMutator interface {
 // Service satisfies the OnPremCaller interface — handlers should accept
 // that interface rather than *Service so unit tests can substitute a fake.
 type Service struct {
-	env            *Env
-	tokens         *TokenFetcher
-	authenticators *AuthenticatorRegistry
-	mgmtClient     *http.Client
-	onPremClient   *http.Client
-	userAgent      string
+	env                     *Env
+	tokens                  *TokenFetcher
+	authenticators          *AuthenticatorRegistry
+	mgmtClient              *http.Client
+	onPremClient            *http.Client
+	userAgent               string
+	onPremResponseSizeLimit int64
 
 	// CSRF handshake state — see CallOnPremiseMutating for the dance.
 	// csrfFetchPath is the GET path used to retrieve a fresh token.
@@ -105,16 +106,40 @@ const DefaultUserAgent = "go-sap-btp-cf-template/0.1"
 // a REST endpoint on the same ICF node works too.
 const DefaultCSRFFetchPath = "/sap/bc/adt/discovery"
 
+// DefaultOnPremResponseSizeLimit caps how much of an on-prem response
+// body Service will let a caller read. The Cloud Connector tunnel
+// itself is trusted, but a misbehaving SAP backend, a misrouted
+// hostname, or — for customer-managed CC topologies — a MITM between
+// CC and SAP could otherwise stream gigabytes into the app's 128 MiB
+// CF memory quota. 10 MiB is well above any legitimate typed-API
+// response (ADT XML, a few hundred KiB of FI line items, etc.).
+//
+// On overshoot, the wrapped resp.Body returns ErrOnPremResponseTooLarge
+// from Read; the caller's io.ReadAll surfaces it and the handler
+// translates to btp.CodeUpstreamUnreachable (502).
+//
+// Override with WithOnPremResponseSizeLimit when a specific fork has
+// a route that legitimately returns more.
+const DefaultOnPremResponseSizeLimit int64 = 10 << 20
+
+// ErrOnPremResponseTooLarge is returned by reads on an on-prem response
+// body once the per-call cap configured via WithOnPremResponseSizeLimit
+// (default DefaultOnPremResponseSizeLimit) is exceeded. Callers using
+// io.ReadAll surface this error from their ReadAll call; the typical
+// translation in handlers is btp.CodeUpstreamUnreachable (502).
+var ErrOnPremResponseTooLarge = errors.New("on-prem response exceeds configured size limit")
+
 // ServiceOption configures NewService. Use WithUserAgent, WithMgmtTimeout,
 // and WithOnPremiseTimeout to tune the defaults; zero options keeps the
 // built-in values.
 type ServiceOption func(*serviceOptions)
 
 type serviceOptions struct {
-	userAgent        string
-	mgmtTimeout      time.Duration
-	onPremiseTimeout time.Duration
-	csrfFetchPath    string
+	userAgent               string
+	mgmtTimeout             time.Duration
+	onPremiseTimeout        time.Duration
+	csrfFetchPath           string
+	onPremResponseSizeLimit int64
 }
 
 // WithUserAgent sets the User-Agent header for outbound on-prem requests.
@@ -144,6 +169,15 @@ func WithCSRFFetchPath(path string) ServiceOption {
 	return func(o *serviceOptions) { o.csrfFetchPath = path }
 }
 
+// WithOnPremResponseSizeLimit caps the per-call on-prem response body.
+// Reads that would push a single response past `bytes` return
+// ErrOnPremResponseTooLarge from the wrapped resp.Body. Zero resets to
+// DefaultOnPremResponseSizeLimit. Pass a larger value if a single fork
+// route legitimately returns more.
+func WithOnPremResponseSizeLimit(bytes int64) ServiceOption {
+	return func(o *serviceOptions) { o.onPremResponseSizeLimit = bytes }
+}
+
 // NewService wires a Service using the defaults listed in DefaultMgmtTimeout,
 // DefaultOnPremiseTimeout, and DefaultUserAgent, plus DefaultAuthenticators()
 // and a TokenFetcher with its own http.Client. Pass ServiceOptions to tune
@@ -160,10 +194,11 @@ func NewService(env *Env, opts ...ServiceOption) (*Service, error) {
 	}
 
 	o := serviceOptions{
-		userAgent:        DefaultUserAgent,
-		mgmtTimeout:      DefaultMgmtTimeout,
-		onPremiseTimeout: DefaultOnPremiseTimeout,
-		csrfFetchPath:    DefaultCSRFFetchPath,
+		userAgent:               DefaultUserAgent,
+		mgmtTimeout:             DefaultMgmtTimeout,
+		onPremiseTimeout:        DefaultOnPremiseTimeout,
+		csrfFetchPath:           DefaultCSRFFetchPath,
+		onPremResponseSizeLimit: DefaultOnPremResponseSizeLimit,
 	}
 	for _, opt := range opts {
 		opt(&o)
@@ -183,6 +218,9 @@ func NewService(env *Env, opts ...ServiceOption) (*Service, error) {
 	if o.csrfFetchPath == "" {
 		o.csrfFetchPath = DefaultCSRFFetchPath
 	}
+	if o.onPremResponseSizeLimit == 0 {
+		o.onPremResponseSizeLimit = DefaultOnPremResponseSizeLimit
+	}
 
 	tokens := NewTokenFetcher(nil)
 
@@ -198,14 +236,15 @@ func NewService(env *Env, opts ...ServiceOption) (*Service, error) {
 	// routes through the Connectivity proxy. Re-using it for management
 	// calls would tunnel XSUAA token requests through the reverse proxy.
 	return &Service{
-		env:            env,
-		tokens:         tokens,
-		authenticators: DefaultAuthenticators(),
-		mgmtClient:     &http.Client{Timeout: o.mgmtTimeout},
-		onPremClient:   &http.Client{Transport: transport, Timeout: o.onPremiseTimeout},
-		userAgent:      o.userAgent,
-		csrfFetchPath:  o.csrfFetchPath,
-		csrfStates:     map[string]*csrfState{},
+		env:                     env,
+		tokens:                  tokens,
+		authenticators:          DefaultAuthenticators(),
+		mgmtClient:              &http.Client{Timeout: o.mgmtTimeout},
+		onPremClient:            &http.Client{Transport: transport, Timeout: o.onPremiseTimeout},
+		userAgent:               o.userAgent,
+		onPremResponseSizeLimit: o.onPremResponseSizeLimit,
+		csrfFetchPath:           o.csrfFetchPath,
+		csrfStates:              map[string]*csrfState{},
 	}, nil
 }
 
@@ -220,6 +259,13 @@ func (s *Service) Authenticators() *AuthenticatorRegistry { return s.authenticat
 // 403 is NOT retried: it means "authenticated but not authorized", which a
 // fresh token cannot fix and re-trying would mask real auth-policy bugs.
 // The returned response body must be closed by the caller.
+//
+// The returned resp.Body is capped at DefaultOnPremResponseSizeLimit
+// (override via WithOnPremResponseSizeLimit). A read past the cap
+// returns ErrOnPremResponseTooLarge; an io.ReadAll caller sees that
+// error from the call and should surface it as 502
+// (CodeUpstreamUnreachable). The cap protects against an SAP/CC
+// misroute streaming gigabytes into the CF memory quota.
 func (s *Service) CallOnPremise(ctx context.Context, destName, method, pathSuffix string, headers http.Header, body io.Reader) (*http.Response, error) {
 	// Reject traversal attempts at the edge: a user-supplied `..` in
 	// pathSuffix would otherwise travel unchanged into the on-prem URL,
@@ -285,6 +331,10 @@ func (s *Service) CallOnPremise(ctx context.Context, destName, method, pathSuffi
 // the underlying error. A 403 that is NOT a CSRF-required signal
 // (i.e. a real authorization failure) surfaces to the caller as-is,
 // no retry.
+//
+// As with CallOnPremise, resp.Body is capped at
+// DefaultOnPremResponseSizeLimit (override via WithOnPremResponseSizeLimit);
+// a read past the cap returns ErrOnPremResponseTooLarge.
 func (s *Service) CallOnPremiseMutating(ctx context.Context, destName, method, pathSuffix string, headers http.Header, body io.Reader) (*http.Response, error) {
 	var bodyBytes []byte
 	if body != nil {
@@ -485,8 +535,58 @@ func (s *Service) callOnce(ctx context.Context, dest *Destination, method, pathS
 	if err := s.authenticators.Apply(ctx, req, dest); err != nil {
 		return nil, fmt.Errorf("apply destination auth: %w", err)
 	}
-	return s.onPremClient.Do(req)
+	resp, err := s.onPremClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	// Cap the readable body so a misbehaving SAP / misrouted endpoint /
+	// MITM in a customer-managed CC topology cannot stream gigabytes
+	// into the app's 128 MiB CF memory quota. The wrap is transparent
+	// to honest callers — io.ReadAll on a small response works as
+	// before; an attempt to read past the cap returns
+	// ErrOnPremResponseTooLarge from Read, which the caller's io.ReadAll
+	// surfaces as a typed error.
+	resp.Body = newLimitedOnPremBody(resp.Body, s.onPremResponseSizeLimit)
+	return resp, nil
 }
+
+// limitedOnPremBody wraps an http.Response.Body to enforce a maximum
+// total read size. Reads up to limit bytes pass through unchanged;
+// the (limit+1)-th byte triggers ErrOnPremResponseTooLarge from Read.
+// The wrapper caps the per-Read slice so callers buffering the body
+// (io.ReadAll) cannot grow the buffer past limit before hitting the
+// error — the memory invariant the cap exists for.
+type limitedOnPremBody struct {
+	rc    io.ReadCloser
+	limit int64
+	read  int64
+}
+
+func newLimitedOnPremBody(rc io.ReadCloser, limit int64) io.ReadCloser {
+	return &limitedOnPremBody{rc: rc, limit: limit}
+}
+
+func (b *limitedOnPremBody) Read(p []byte) (int, error) {
+	if b.read > b.limit {
+		return 0, ErrOnPremResponseTooLarge
+	}
+	// Cap the slice so we read at most one byte past the limit — that's
+	// what proves the body has more than `limit` content. Without this
+	// cap a single Read of e.g. 32 KiB into a 1-byte-remaining budget
+	// would buffer 32 KiB before the error fires.
+	remaining := b.limit - b.read + 1
+	if int64(len(p)) > remaining {
+		p = p[:remaining]
+	}
+	n, err := b.rc.Read(p)
+	b.read += int64(n)
+	if b.read > b.limit {
+		return n, ErrOnPremResponseTooLarge
+	}
+	return n, err
+}
+
+func (b *limitedOnPremBody) Close() error { return b.rc.Close() }
 
 // skipForwardedHeader filters headers that must not be forwarded from the
 // inbound approuter request to the on-prem call:
