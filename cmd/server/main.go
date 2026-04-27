@@ -18,6 +18,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
+	"github.com/danielgtaylor/huma/v2/adapters/humagin"
 	"github.com/gin-gonic/gin"
 
 	"github.com/hochfrequenz/go-sap-btp-cf-template/examples/adtcheckrun"
@@ -218,17 +220,40 @@ func buildRouter(validator *btp.JWTValidator, caller btp.OnPremCaller, mutator b
 		claims, _ := c.Get("jwtClaims")
 		c.JSON(http.StatusOK, gin.H{"claims": claims})
 	})
+
+	// Mount a huma.API on top of the same Gin group. huma generates a
+	// real OpenAPI 3.1 spec from the handler signatures and serves it +
+	// a Swagger UI for free:
+	//
+	//   GET /api/openapi.json   — the spec (OpenAPI 3.1)
+	//   GET /api/openapi.yaml   — same, YAML
+	//   GET /api/docs           — Swagger UI rendered from the spec
+	//   GET /api/schemas/*      — referenced schemas
+	//
+	// They sit under /api so the JWT middleware applies — the spec
+	// describes a JWT-gated API; reading it requires the same auth.
+	// Forks that want public docs can move the huma mount to the
+	// engine root and drop validator from the operations directly,
+	// but the typical case (HF-internal API) is happier with gated
+	// docs.
+	hapi := humagin.NewWithGroup(r, api,
+		huma.DefaultConfig("Go SAP BTP CF Template", "0.1"))
+
 	// Two constrained-proxy demos. Both are fully typed (JSON in,
 	// JSON out) — SAP's XML is consumed + parsed inside the handler,
 	// never emitted at the client boundary:
-	//   GET  /api/adt-discovery  → list ADT workspaces + collections.
-	//   POST /api/adt-checkrun   → run an ATC / syntax check for one
-	//                              ABAP object; goes through the
-	//                              CSRF handshake transparently.
-	// Replace or add your own handlers here. Both follow the same
-	// shape: destination name + SAP path hard-coded at Register
-	// time, validator tags on the request struct.
-	adtdiscovery.Register(api, caller)
+	//   GET  /api/adt-discovery  → huma-style: typed Input/Output,
+	//                               appears in the OpenAPI spec.
+	//   POST /api/adt-checkrun   → gin-style: raw c.ShouldBindJSON,
+	//                               does NOT appear in the OpenAPI
+	//                               spec. Migrating it (and
+	//                               invoicesync) to huma is tracked
+	//                               as follow-up work — they read
+	//                               jwtClaims, which currently lives
+	//                               in the gin context map and needs
+	//                               a small adapter to surface in
+	//                               huma's context.Context.
+	adtdiscovery.Register(hapi, caller)
 	adtcheckrun.Register(api, mutator)
 
 	return r

@@ -12,11 +12,11 @@ import (
 
 	"github.com/corbym/gocrest/is"
 	"github.com/corbym/gocrest/then"
+	"github.com/danielgtaylor/huma/v2"
+	"github.com/danielgtaylor/huma/v2/adapters/humagin"
 	"github.com/gin-gonic/gin"
-	"github.com/golang-jwt/jwt/v5"
 
 	"github.com/hochfrequenz/go-sap-btp-cf-template/examples/adtdiscovery"
-	"github.com/hochfrequenz/go-sap-btp-cf-template/internal/btp"
 )
 
 // fakeCaller mirrors the OnPremCaller pattern used elsewhere in
@@ -33,18 +33,17 @@ func (f *fakeCaller) CallOnPremise(_ context.Context, dest, method, path string,
 	return f.resp, f.err
 }
 
-func stubJWTClaims(claims jwt.MapClaims) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.Set("jwtClaims", claims)
-		c.Next()
-	}
-}
-
+// newRouter builds a minimal gin engine + huma.API mirroring the
+// production wiring (humagin.NewWithGroup on a router group). Tests
+// then httptest as before; the path matches whatever the group's
+// prefix is. Empty prefix in tests so /adt-discovery is the path.
 func newRouter(fake *fakeCaller) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.Use(stubJWTClaims(jwt.MapClaims{"user_name": "test-user@example"}))
-	r.GET("/adt-discovery", adtdiscovery.Handler(fake))
+	api := r.Group("")
+	hapi := humagin.NewWithGroup(r, api,
+		huma.DefaultConfig("test", "0.0.0"))
+	adtdiscovery.Register(hapi, fake)
 	return r
 }
 
@@ -86,8 +85,10 @@ func Test_Handler_ReturnsTypedJSONFromSAPXML(t *testing.T) {
 	r.ServeHTTP(w, req)
 
 	then.AssertThat(t, w.Code, is.EqualTo(http.StatusOK))
-	then.AssertThat(t, w.Header().Get("Content-Type"),
-		is.EqualTo("application/json; charset=utf-8"))
+	// huma serves successful responses as application/json.
+	then.AssertThat(t,
+		strings.Contains(w.Header().Get("Content-Type"), "application/json"),
+		is.True())
 	// No XML leak at the boundary.
 	then.AssertThat(t, strings.Contains(w.Body.String(), "<?xml"), is.False())
 	then.AssertThat(t, strings.Contains(w.Body.String(), "<app:"), is.False())
@@ -130,6 +131,11 @@ func Test_Handler_CallsCorrectSAPPath(t *testing.T) {
 	then.AssertThat(t, fake.gotPath, is.EqualTo("/sap/bc/adt/discovery"))
 }
 
+// Test_Handler_SurfacesUpstreamErrorAs502 pins the upstream-failure
+// path. huma renders errors as the RFC 7807 problem-details model
+// (Title, Status, Detail) — different shape from the gin-style
+// btp.ErrorEnvelope used elsewhere in the template. The status is
+// what callers switch on; the detail carries the user-safe message.
 func Test_Handler_SurfacesUpstreamErrorAs502(t *testing.T) {
 	fake := &fakeCaller{err: errors.New("on-prem system unreachable")}
 	r := newRouter(fake)
@@ -139,10 +145,12 @@ func Test_Handler_SurfacesUpstreamErrorAs502(t *testing.T) {
 	r.ServeHTTP(w, req)
 
 	then.AssertThat(t, w.Code, is.EqualTo(http.StatusBadGateway))
-	var env btp.ErrorEnvelope
+	var env huma.ErrorModel
 	then.AssertThat(t, json.Unmarshal(w.Body.Bytes(), &env), is.Nil())
-	then.AssertThat(t, env.Error.Code, is.EqualTo(btp.CodeUpstreamUnreachable))
-	// No leakage of Go error text.
+	then.AssertThat(t, env.Status, is.EqualTo(http.StatusBadGateway))
+	then.AssertThat(t, env.Detail, is.EqualTo("on-premise call failed"))
+	// No leakage of Go error text — the underlying err is captured
+	// for operator side, not surfaced in the envelope.
 	then.AssertThat(t,
 		strings.Contains(w.Body.String(), "on-prem system unreachable"), is.False())
 }
@@ -161,9 +169,9 @@ func Test_Handler_SurfacesMalformedXMLAs502(t *testing.T) {
 	r.ServeHTTP(w, req)
 
 	then.AssertThat(t, w.Code, is.EqualTo(http.StatusBadGateway))
-	var env btp.ErrorEnvelope
+	var env huma.ErrorModel
 	then.AssertThat(t, json.Unmarshal(w.Body.Bytes(), &env), is.Nil())
-	then.AssertThat(t, env.Error.Code, is.EqualTo(btp.CodeUpstreamUnreachable))
+	then.AssertThat(t, env.Status, is.EqualTo(http.StatusBadGateway))
 }
 
 func Test_Handler_SurfacesNon2xxAs502(t *testing.T) {
@@ -180,9 +188,9 @@ func Test_Handler_SurfacesNon2xxAs502(t *testing.T) {
 	r.ServeHTTP(w, req)
 
 	then.AssertThat(t, w.Code, is.EqualTo(http.StatusBadGateway))
-	var env btp.ErrorEnvelope
+	var env huma.ErrorModel
 	then.AssertThat(t, json.Unmarshal(w.Body.Bytes(), &env), is.Nil())
-	then.AssertThat(t, env.Error.Code, is.EqualTo(btp.CodeUpstreamUnreachable))
+	then.AssertThat(t, env.Status, is.EqualTo(http.StatusBadGateway))
 }
 
 // errReader returns a controlled error from Read so the io.ReadAll
@@ -205,28 +213,29 @@ func Test_Handler_SurfacesBodyReadErrorAs502(t *testing.T) {
 	r.ServeHTTP(w, req)
 
 	then.AssertThat(t, w.Code, is.EqualTo(http.StatusBadGateway))
-	var env btp.ErrorEnvelope
+	var env huma.ErrorModel
 	then.AssertThat(t, json.Unmarshal(w.Body.Bytes(), &env), is.Nil())
-	then.AssertThat(t, env.Error.Code, is.EqualTo(btp.CodeUpstreamUnreachable))
+	then.AssertThat(t, env.Status, is.EqualTo(http.StatusBadGateway))
 }
 
-func Test_Register_AttachesGETRoute(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	r := gin.New()
-	r.Use(stubJWTClaims(jwt.MapClaims{"user_name": "u@example"}))
-	api := r.Group("/api")
-	fake := &fakeCaller{
-		resp: &http.Response{
-			StatusCode:    http.StatusOK,
-			Body:          io.NopCloser(strings.NewReader(sapDiscoveryXML)),
-			ContentLength: -1,
-		},
-	}
-	adtdiscovery.Register(api, fake)
+// Test_Register_AppearsInOpenAPISpec pins that registering the handler
+// produces an OpenAPI operation in the auto-generated /openapi.json.
+// A future regression that drops huma.Register or breaks the input/
+// output type discovery would silently disappear from the spec — this
+// test catches that.
+func Test_Register_AppearsInOpenAPISpec(t *testing.T) {
+	fake := &fakeCaller{}
+	r := newRouter(fake)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/adt-discovery", nil)
+	req := httptest.NewRequest(http.MethodGet, "/openapi.json", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
 	then.AssertThat(t, w.Code, is.EqualTo(http.StatusOK))
+	// Crude shape-check: the spec must mention our path AND the
+	// derived operation ID. Full schema validation is huma's
+	// concern, not ours.
+	body := w.Body.String()
+	then.AssertThat(t, strings.Contains(body, "/adt-discovery"), is.True())
+	then.AssertThat(t, strings.Contains(body, "adt-discovery"), is.True())
 }

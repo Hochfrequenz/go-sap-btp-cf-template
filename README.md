@@ -344,6 +344,49 @@ Local debugging: set `LOG_LEVEL=debug` before running the server to see `DEBUG`-
 
 ---
 
+### OpenAPI 3.1 + Swagger UI via huma
+
+The router mounts a [huma v2](https://huma.rocks/) API on top of the same `api` group, so every handler registered through huma appears in an auto-generated OpenAPI 3.1 spec — and a Swagger UI rendered from it — with **no comments, no annotations, no manual spec to maintain**:
+
+| Path                  | Served                                      |
+| --------------------- | ------------------------------------------- |
+| `/api/openapi.json`   | OpenAPI 3.1 (JSON)                          |
+| `/api/openapi.yaml`   | Same, YAML                                  |
+| `/api/openapi-3.0.json` | OpenAPI 3.0.3 (for tools that don't speak 3.1 yet) |
+| `/api/docs`           | Swagger UI                                  |
+| `/api/schemas/*`      | Referenced JSON Schemas                     |
+
+These sit under `/api`, so the JWT middleware applies — the spec describes a JWT-gated API; reading it requires the same auth. Forks that want public docs can move the huma mount to the engine root in `cmd/server/main.go`'s `buildRouter`.
+
+A huma-style handler looks like this — `examples/adtdiscovery/handler.go` is the canonical example in this repo:
+
+```go
+type DiscoveryInput struct{}                      // GET, no input
+type DiscoveryOutput struct{ Body Response }      // huma reads `Body` for the JSON payload
+
+func Register(api huma.API, svc btp.OnPremCaller) {
+    huma.Register(api, huma.Operation{
+        OperationID: "adt-discovery",
+        Method:      http.MethodGet,
+        Path:        "/adt-discovery",
+        Summary:     "List ADT workspaces and collections",
+    }, Handler(svc))
+}
+
+func Handler(svc btp.OnPremCaller) func(context.Context, *DiscoveryInput) (*DiscoveryOutput, error) {
+    return func(ctx context.Context, _ *DiscoveryInput) (*DiscoveryOutput, error) {
+        // … call svc.CallOnPremise, parse, translate …
+        return &DiscoveryOutput{Body: toResponse(svcDoc)}, nil
+    }
+}
+```
+
+The OpenAPI operation, request/response schemas, and validation rules are derived from the function signature and the embedded structs' JSON tags. Add a field with `validate:"required,oneof=EUR USD GBP"` and the spec carries that constraint automatically.
+
+> **Two handler styles ship in this repo today.** `adtdiscovery` is huma-style (above). `adtcheckrun` and `invoicesync` stay gin-style (`func(c *gin.Context)`) for now — they read `jwtClaims` from the gin context map for their audit log, and surfacing that to a `context.Context`-only huma handler needs a small adapter that's tracked as follow-up. Pick whichever style fits a new handler: huma when the OpenAPI spec coverage is worth more than direct `c.Get("jwtClaims")` access, gin when claim-reading is on the hot path. Both can coexist on the same router group.
+
+> **Error envelope.** Huma renders errors as RFC 7807 problem-details (`{"title":"Bad Gateway","status":502,"detail":"…"}`); the gin-style handlers use `btp.ErrorEnvelope` (`{"error":{"code":"upstream_unreachable","message":"…","request_id":"…"}}`). Aware mismatch: unifying both onto `btp.ErrorEnvelope` requires overriding `huma.NewError` AND propagating `request_id` into `context.Context`, which is the same adapter as the `jwtClaims` follow-up. Until then, clients calling `/api/adt-discovery` see RFC 7807; clients calling `/api/adt-checkrun` see the typed envelope.
+
 ### Test your handler without touching SAP
 
 > **Coming from ABAP?** Unit-testing in Go is nothing like testing in the SAP stack, and this is good news. A Go test compiles and runs in well under a second — no transport request round-trip, no test user to maintain, no colleague's session to lock, no data to clean up in table `BKPF` afterwards. The red-green-refactor loop that never really worked in ABAP works here because the feedback is cheap. If that sounds unfamiliar, the three tests in this sub-section are a good first encounter: copy them, break something in the handler, watch the test fail in 0.3 s, fix it, watch it pass. That's the whole loop.
