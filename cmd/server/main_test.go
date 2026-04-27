@@ -44,6 +44,66 @@ func Test_logLevelFromEnv_MapsKnownAndUnknown(t *testing.T) {
 	}
 }
 
+// Test_recoverPanic_EmitsTypedEnvelope pins the recovery contract: a
+// panicking handler must produce a JSON btp.ErrorEnvelope with code
+// = "internal", not Gin's plain-text "Internal Server Error". A future
+// refactor that reverts to gin.Recovery() trips this test.
+func Test_recoverPanic_EmitsTypedEnvelope(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(recoverPanic(), btp.RequestID())
+	r.GET("/boom", func(_ *gin.Context) {
+		panic("kaboom")
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/boom", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	then.AssertThat(t, w.Code, is.EqualTo(http.StatusInternalServerError))
+	then.AssertThat(t, w.Header().Get("Content-Type"),
+		is.EqualTo("application/json; charset=utf-8"))
+
+	var env btp.ErrorEnvelope
+	then.AssertThat(t, json.Unmarshal(w.Body.Bytes(), &env), is.Nil())
+	then.AssertThat(t, env.Error.Code, is.EqualTo(btp.CodeInternal))
+	then.AssertThat(t, env.Error.Message, is.EqualTo("internal error"))
+	// Crucially: the panic value must NOT leak to the client. "kaboom"
+	// belongs in the operator-side log line via AbortError, not in the
+	// envelope message.
+	then.AssertThat(t, strings.Contains(w.Body.String(), "kaboom"), is.False())
+
+	// RequestID middleware ran inside the recovery wrap, so the envelope
+	// carries the same ID the access log would record. A panic before
+	// RequestID would emit an empty request_id — acceptable for that
+	// pre-request edge case, but normal handler-internal panics should
+	// always carry one.
+	then.AssertThat(t, env.Error.RequestID != "", is.True())
+}
+
+// Test_recoverPanic_PreservesClientSuppliedRequestID pins that an
+// X-Request-ID header from a trusted upstream (e.g. the approuter)
+// flows through into the panic envelope, not just into normal access
+// logs. A correlated panic + log + client header is the shortest path
+// from a customer report to the operator-side line.
+func Test_recoverPanic_PreservesClientSuppliedRequestID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(recoverPanic(), btp.RequestID())
+	r.GET("/boom", func(_ *gin.Context) {
+		panic("kaboom")
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/boom", nil)
+	req.Header.Set("X-Request-ID", "rid-from-approuter")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	var env btp.ErrorEnvelope
+	then.AssertThat(t, json.Unmarshal(w.Body.Bytes(), &env), is.Nil())
+	then.AssertThat(t, env.Error.RequestID, is.EqualTo("rid-from-approuter"))
+}
+
 // Test_requestLog_OmitsQueryStringAndClaims pins the deliberate-omission
 // policy documented on requestLog: the access log records method, path,
 // status, duration, client IP, and request ID — never query string,

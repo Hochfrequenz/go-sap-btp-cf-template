@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -189,9 +190,13 @@ func buildRouter(validator *btp.JWTValidator, caller btp.OnPremCaller, mutator b
 	// would let a direct caller forge c.ClientIP(). nil trusts nobody; the
 	// logged IP is always the real TCP peer.
 	_ = r.SetTrustedProxies(nil)
-	// Middleware order matters: RequestID first so both the access log
-	// and any btp.AbortError envelope can pick up the same ID.
-	r.Use(gin.Recovery(), btp.RequestID(), requestLog(logger))
+	// Middleware order matters. Outermost is recoverPanic — its deferred
+	// recover() must wrap every other handler so a panic anywhere in the
+	// chain (including in RequestID itself, however unlikely) lands here
+	// rather than crashing the goroutine and dropping the connection mid-
+	// response. RequestID runs next so the access log and any AbortError
+	// envelope (including the one this recovery emits) carry the same ID.
+	r.Use(recoverPanic(), btp.RequestID(), requestLog(logger))
 
 	r.GET("/healthz", func(c *gin.Context) {
 		c.String(http.StatusOK, "ok")
@@ -236,6 +241,34 @@ func buildUserAgent() string {
 		}
 	}
 	return btp.DefaultUserAgent
+}
+
+// recoverPanic replaces gin.Recovery() so panic responses honour the
+// typed btp.ErrorEnvelope contract. Default gin.Recovery in ReleaseMode
+// writes "Internal Server Error" as text/plain — a client that switches
+// on `error.code` gets undefined behaviour for panics. This emits the
+// same envelope shape every other error path uses.
+//
+// io.Discard suppresses Gin's built-in stack-to-stderr line: AbortError
+// already does its own slog.ErrorContext with the request ID, and the
+// panic value + stack are pushed into that line so the operator gets
+// one structured record per panic instead of two — one plain-text from
+// Gin and one structured from us.
+//
+// Note: by the time this fires, btp.RequestID() has already run (it is
+// installed inside this Recovery's deferred wrap) so the envelope and
+// the operator log line share the same request_id. A panic *before*
+// RequestID runs would surface with an empty request_id; that case is
+// pre-request and acceptable.
+func recoverPanic() gin.HandlerFunc {
+	return gin.CustomRecoveryWithWriter(io.Discard, func(c *gin.Context, recovered any) {
+		// Build an err that carries the panic value and the stack so
+		// AbortError's slog line preserves both. The client never sees
+		// it — userMsg below is what reaches the wire.
+		err := fmt.Errorf("panic: %v\n%s", recovered, debug.Stack())
+		btp.AbortError(c, http.StatusInternalServerError, btp.CodeInternal,
+			"internal error", err)
+	})
 }
 
 // requestLog is a minimal structured access logger. gin.Logger() is fine
