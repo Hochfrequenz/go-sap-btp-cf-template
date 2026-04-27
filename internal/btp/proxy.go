@@ -90,6 +90,18 @@ func (t *onPremiseRoundTripper) RoundTrip(req *http.Request) (*http.Response, er
 }
 
 // DefaultOnPremiseTimeout is the per-call timeout for proxied requests.
-// On-prem R/3 systems can be slow; Service uses this and exposes no knob —
-// wrap the returned http.Client if you need a different value.
-const DefaultOnPremiseTimeout = 30 * time.Second
+// Sized for the realistic workload this template targets: a legacy on-prem
+// SAP system reached through Cloud Connector + (for mutating routes) a
+// CSRF handshake. Such calls regularly take minutes under normal load and
+// have been observed up to ~5 minutes in the worst case. 10 minutes leaves
+// headroom over that worst case without normalising calls that are
+// genuinely hung. Override per-instance with [WithOnPremiseTimeout] when a
+// fork's SAP system is reliably faster.
+//
+// Pairs with — but stays strictly *under* — cmd/server/main.go's
+// WriteTimeout (15 min). The asymmetry is deliberate: this per-call budget
+// fires first on a hung SAP and surfaces a clean upstream_unreachable
+// envelope; setting it equal to or larger than WriteTimeout would let the
+// server-side timeout race this one and produce a less-helpful failure
+// mode. If a fork raises this value, raise WriteTimeout proportionally.
+const DefaultOnPremiseTimeout = 10 * time.Minute
