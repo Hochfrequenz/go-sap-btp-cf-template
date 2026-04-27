@@ -752,18 +752,30 @@ Shipped out of the box: `AuthNone` and `AuthBasic`, plus a rejecting fallback so
 
 For Principal Propagation specifically: the approuter-forwarded user JWT is stashed in the request context under `btp.ForwardedUserTokenKey{}` — a PP authenticator reads it from there and sets `SAP-Connectivity-Authentication`.
 
-### HTTP server timeouts
+### Timeouts — three layers, two of them ours
 
-`cmd/server/main.go` sets four slow-client timeouts on the `http.Server`:
+A request that fans out to a legacy on-prem SAP system can sit on the wire for minutes. Three different timeouts gate it; two are set by this template, the third is deployment-managed.
 
-| Setting             | Default | Why                                                       |
-| ------------------- | ------- | --------------------------------------------------------- |
-| `ReadHeaderTimeout` | 10 s    | Slowloris on request headers.                             |
-| `ReadTimeout`       | 60 s    | Slow-body POSTs (e.g. `/api/adt-checkrun`).               |
-| `WriteTimeout`      | 60 s    | Stalled reader pinning a handler that's streaming a body. |
-| `IdleTimeout`       | 120 s   | Keep-alive sockets parked indefinitely.                   |
+**HTTP server (`cmd/server/main.go`):**
 
-60 s on `ReadTimeout` / `WriteTimeout` is sized for the slowest legitimate path the template ships: `/api/adt-checkrun` goes through the CSRF handshake plus the on-prem hop and can take 30 s+. If a fork adds a handler that legitimately needs more (large-file streaming, long-poll), keep this default and run that handler on its own `http.Server` instance with a relaxed timeout there — looser global timeouts re-open the slow-client surface for every other route.
+| Setting             | Default | Why                                                                           |
+| ------------------- | ------- | ----------------------------------------------------------------------------- |
+| `ReadHeaderTimeout` | 10 s    | Slowloris on request headers.                                                 |
+| `ReadTimeout`       | 60 s    | Slow-body POSTs (client → server). Request bodies are small JSON.             |
+| `WriteTimeout`      | 600 s   | Bounds total handler runtime — `WriteTimeout` starts at header-read, not at first write. Sized for an on-prem SAP system that is usually slow under load (ADT through CSRF + Cloud Connector regularly takes minutes; observed worst case is ~5 minutes). |
+| `IdleTimeout`       | 120 s   | Keep-alive sockets parked indefinitely.                                       |
+
+**On-prem HTTP client (`btp.DefaultOnPremiseTimeout`):**
+
+| Setting                    | Default | Why                                                                  |
+| -------------------------- | ------- | -------------------------------------------------------------------- |
+| `DefaultOnPremiseTimeout`  | 600 s   | Per-call timeout on `*btp.Service`'s on-prem `*http.Client`. Aligned with `WriteTimeout` so neither fires before the other. Override per-instance with `btp.WithOnPremiseTimeout(...)` when the fork's SAP is reliably faster. |
+
+The two values are deliberately equal: the on-prem client timeout would fire first on a slow SAP and surface as a clean error envelope; setting `WriteTimeout` lower would let the server-side timeout race the client-side one for the same condition.
+
+**CF Gorouter (deployment-managed):** The CF route layer has its own per-request timeout (typically ~900 s, varies by foundation/landscape). It bounds *both* of the above. If a fork legitimately needs longer than the route allows, raising the values here is moot — the platform owner has to extend the route timeout.
+
+If a single handler legitimately needs longer than 600 s — large-file streaming, long-poll, exceptionally slow batch — override per-request with `http.NewResponseController(w).SetWriteDeadline(...)` (server side) **and** wrap the on-prem client (or pass a different `WithOnPremiseTimeout` to a dedicated `*btp.Service` instance for that route). Loosening the global defaults re-opens the slow-client surface for every other route.
 
 ## What this MWE deliberately does *not* do
 

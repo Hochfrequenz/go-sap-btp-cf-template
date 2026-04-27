@@ -61,24 +61,41 @@ func main() {
 	// only behind the approuter):
 	//
 	//   - ReadHeaderTimeout (10s):  Slowloris on request headers.
-	//   - ReadTimeout       (60s):  Slow-body POSTs (e.g. /api/adt-checkrun).
-	//   - WriteTimeout      (60s):  A stalled reader pinning a goroutine
-	//                               while the handler streams a response.
+	//   - ReadTimeout       (60s):  Slow-body POSTs (client → server).
+	//   - WriteTimeout     (600s):  Bounds total handler runtime, since
+	//                               Go starts WriteTimeout at header-read,
+	//                               not at first write.
 	//   - IdleTimeout      (120s):  Keep-alive sockets parked indefinitely.
 	//
-	// 60s on Read/Write is sized for the slowest legitimate path:
-	// /api/adt-checkrun goes through the CSRF handshake plus the on-prem
-	// hop and can take 30s+; 60s leaves margin without normalising
-	// genuinely degraded SAP responses. A handler that legitimately needs
-	// more (large file streaming, long-poll) should run on its own
-	// http.Server instance with the timeout relaxed there, rather than
-	// loosening this default.
+	// WriteTimeout is sized for an on-prem SAP system that is usually
+	// slow under load. An ADT call routed through the Cloud Connector +
+	// CSRF handshake regularly takes minutes, and observed worst case is
+	// ~5 minutes. 600s (10 minutes) leaves comfortable margin for the
+	// "usual" slow-but-completing call without normalising calls that are
+	// genuinely hung — values much higher than this should be a per-route
+	// per-request override (see below), not a global default.
+	//
+	// Paired with btp.DefaultOnPremiseTimeout (also 10m). The two close
+	// the slow-SAP cliff together: the on-prem client surfaces a clean
+	// timeout error to the handler if SAP is hung, and WriteTimeout
+	// catches the (hopefully unreachable) case where the handler itself
+	// stalls without making the on-prem call.
+	//
+	// ReadTimeout stays at 60s because it bounds *client → server* body
+	// transfer; the request bodies the template ships are small JSON, and
+	// 60s on a slow body upload is already deep into Slowloris territory.
+	//
+	// A handler that legitimately needs an even longer write window
+	// (large-file streaming, long-poll) should override per-request via
+	// http.NewResponseController(w).SetWriteDeadline(...) rather than
+	// raising this default — looser global timeouts re-open the
+	// slow-client surface for every other route.
 	srv := &http.Server{
 		Addr:              ":" + port,
 		Handler:           r,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       60 * time.Second,
-		WriteTimeout:      60 * time.Second,
+		WriteTimeout:      600 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
 
