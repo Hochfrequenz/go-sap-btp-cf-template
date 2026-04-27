@@ -38,6 +38,7 @@ What the template abstracts for you: XSUAA client-creds for both the Destination
 8. [What this MWE deliberately does *not* do](#what-this-mwe-deliberately-does-not-do)
 9. [How it works under the hood](#how-it-works-under-the-hood)
 10. [References](#references)
+11. [License](#license)
 
 ## Repository layout
 
@@ -895,6 +896,6 @@ XSUAA client-credentials tokens are cached with a 30 s refresh leeway and collap
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Matches the existing public Hochfrequenz precedent (`adtler` is also MIT). Forks are free to relicense their own additions, but the template's contents stay MIT.
+MIT — see [LICENSE](LICENSE). Matches the existing public Hochfrequenz precedent (`adtler` is also MIT). The template's contents are MIT; new code a fork adds on top can be under any licence the fork chooses (your additions, your call).
 
 XML types in `examples/adtcheckrun/handler.go` and `examples/adtdiscovery/handler.go` are adapted from [`Hochfrequenz/adtler`](https://github.com/Hochfrequenz/adtler) (MIT) — attribution is in the source files, not relicensing.
