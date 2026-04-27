@@ -1,6 +1,7 @@
 package btp_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -410,6 +411,86 @@ func Test_Service_CallOnPremise_WithUserAgentOverride(t *testing.T) {
 	then.AssertThat(t, err, is.Nil())
 	defer func() { _ = resp.Body.Close() }()
 	then.AssertThat(t, resp.Header.Get("X-Received-UA"), is.EqualTo("my-service/v1.2.3"))
+}
+
+// Test_Service_CallOnPremise_CapsOversizedResponse pins the contract
+// from issue #50: a misbehaving SAP / misrouted CC topology that
+// streams more than the configured cap must surface
+// ErrOnPremResponseTooLarge from the caller's io.ReadAll, NOT silently
+// fill memory. Pins the memory invariant via a length check on the
+// buffered bytes.
+func Test_Service_CallOnPremise_CapsOversizedResponse(t *testing.T) {
+	// The "SAP" side streams 4 KiB; the cap below is 1 KiB.
+	big := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(bytes.Repeat([]byte("X"), 4096))
+	}))
+	defer big.Close()
+
+	s := newBTPStack(t, fmt.Sprintf(`{
+		"destinationConfiguration":{"Name":"D","Type":"HTTP","URL":%q,"Authentication":"NoAuthentication","ProxyType":"OnPremise"}
+	}`, big.URL))
+	// Repoint the stack's proxy at `big` rather than the default
+	// s.onPrem (which always returns a small JSON). Same swap pattern
+	// the WithOnPremiseTimeout test uses.
+	s.proxy.Close()
+	s.proxy = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.Header.Get("Proxy-Authorization"), "Bearer ") {
+			http.Error(w, "missing proxy auth", http.StatusProxyAuthRequired)
+			return
+		}
+		u, _ := url.Parse(r.RequestURI)
+		outReq, _ := http.NewRequestWithContext(r.Context(), r.Method, big.URL+u.Path, r.Body)
+		resp, err := http.DefaultClient.Do(outReq)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		defer func() { _ = resp.Body.Close() }()
+		w.WriteHeader(resp.StatusCode)
+		_, _ = io.Copy(w, resp.Body)
+	}))
+	t.Cleanup(s.proxy.Close)
+	pu, _ := url.Parse(s.proxy.URL)
+	s.env.Conn.OnPremiseProxyHost = pu.Hostname()
+	s.env.Conn.OnPremiseProxyPort = pu.Port()
+
+	svc, err := btp.NewService(s.env, btp.WithOnPremResponseSizeLimit(1024))
+	then.AssertThat(t, err, is.Nil())
+
+	resp, err := svc.CallOnPremise(context.Background(), "D", http.MethodGet, "/x", nil, nil)
+	then.AssertThat(t, err, is.Nil())
+	defer func() { _ = resp.Body.Close() }()
+
+	body, err := io.ReadAll(resp.Body)
+	then.AssertThat(t, err, is.Not(is.Nil()))
+	then.AssertThat(t, errors.Is(err, btp.ErrOnPremResponseTooLarge), is.True())
+	// Memory invariant: never buffer more than the cap (plus the +1
+	// byte the wrapper reads to detect overflow).
+	then.AssertThat(t, int64(len(body)) <= 1025, is.True())
+}
+
+// Test_Service_CallOnPremise_AllowsResponseUnderLimit pins the happy
+// path: a response well under the cap reads through unchanged. Pairs
+// with the cap test to prove the wrapper is transparent on legitimate
+// traffic.
+func Test_Service_CallOnPremise_AllowsResponseUnderLimit(t *testing.T) {
+	s := newBTPStack(t, `{
+		"destinationConfiguration":{"Name":"D","Type":"HTTP","URL":"http://placeholder","Authentication":"NoAuthentication","ProxyType":"OnPremise"}
+	}`)
+	// newBTPStack's on-prem returns a small JSON ({"ok":true,...}),
+	// well under any sensible cap.
+
+	svc, err := btp.NewService(s.env, btp.WithOnPremResponseSizeLimit(1024))
+	then.AssertThat(t, err, is.Nil())
+
+	resp, err := svc.CallOnPremise(context.Background(), "D", http.MethodGet, "/x", nil, nil)
+	then.AssertThat(t, err, is.Nil())
+	defer func() { _ = resp.Body.Close() }()
+
+	body, err := io.ReadAll(resp.Body)
+	then.AssertThat(t, err, is.Nil())
+	then.AssertThat(t, len(body) > 0, is.True())
 }
 
 // Test_Service_CallOnPremise_WithOnPremiseTimeout proves the timeout
