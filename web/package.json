@@ -2,6 +2,7 @@
   "name": "go-btp-mwe-web",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "description": "SAP approuter in front of the Go BTP MWE backend",
   "type": "commonjs",
   "scripts": {

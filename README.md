@@ -892,3 +892,9 @@ XSUAA client-credentials tokens are cached with a 30 s refresh leeway and collap
 - [SAP Cloud SDK (JS) — on-premise connectivity headers](https://sap.github.io/cloud-sdk/docs/js/features/connectivity/on-premise)
 - [BTP-Python-Template](https://github.com/Hochfrequenz/BTP-Python-Template) — the Python analogue
 - [sap-mcp-config](https://github.com/Hochfrequenz/sap-mcp-config) — source of the eager-validation pattern used in `env.go`
+
+## License
+
+MIT — see [LICENSE](LICENSE). Matches the existing public Hochfrequenz precedent (`adtler` is also MIT). Forks are free to relicense their own additions, but the template's contents stay MIT.
+
+XML types in `examples/adtcheckrun/handler.go` and `examples/adtdiscovery/handler.go` are adapted from [`Hochfrequenz/adtler`](https://github.com/Hochfrequenz/adtler) (MIT) — attribution is in the source files, not relicensing.
