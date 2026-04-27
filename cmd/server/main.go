@@ -192,11 +192,14 @@ func buildRouter(validator *btp.JWTValidator, caller btp.OnPremCaller, mutator b
 	_ = r.SetTrustedProxies(nil)
 	// Middleware order matters. Outermost is recoverPanic — its deferred
 	// recover() must wrap every other handler so a panic anywhere in the
-	// chain (including in RequestID itself, however unlikely) lands here
-	// rather than crashing the goroutine and dropping the connection mid-
-	// response. RequestID runs next so the access log and any AbortError
-	// envelope (including the one this recovery emits) carry the same ID.
-	r.Use(recoverPanic(), btp.RequestID(), requestLog(logger))
+	// chain lands in the typed btp.ErrorEnvelope path rather than
+	// crashing the goroutine. RequestID runs next so the access log and
+	// any AbortError envelope (including the one recoverPanic emits)
+	// carry the same ID. requestLog stays innermost so its deferred
+	// access-log line captures the final response status — anything
+	// running after it would not see status changes its own defer made;
+	// securityHeaders therefore goes immediately before it.
+	r.Use(recoverPanic(), btp.RequestID(), securityHeaders(), requestLog(logger))
 
 	r.GET("/healthz", func(c *gin.Context) {
 		c.String(http.StatusOK, "ok")
@@ -269,6 +272,44 @@ func recoverPanic() gin.HandlerFunc {
 		btp.AbortError(c, http.StatusInternalServerError, btp.CodeInternal,
 			"internal error", err)
 	})
+}
+
+// securityHeaders attaches a small, JSON-API-appropriate set of response
+// headers on every response. The backend serves JSON (not HTML), so CSP
+// and frame-ancestors policies are low-value and intentionally omitted —
+// the headers below are the cheap wins that any public-facing service is
+// expected to emit, regardless of whether browsers or other services are
+// the consumer.
+//
+//   - Strict-Transport-Security: a year, includeSubDomains. The backend
+//     is reachable on its .cfapps.* route directly, not just behind the
+//     approuter, so every response that crosses the public internet
+//     should pin TLS for future requests.
+//   - X-Content-Type-Options: nosniff. Suppresses MIME-sniffing on
+//     anything we serve, in case a buggy proxy ever rewrites a
+//     Content-Type.
+//   - Referrer-Policy: no-referrer. We never serve HTML, so a Referer
+//     header originating from this service makes no sense; keep clients
+//     from leaking their own URLs onward in case of an unintended
+//     redirect.
+//   - Cache-Control: no-store on /api/*. API responses are user-scoped
+//     by definition (everything under /api is JWT-gated) — no browser,
+//     intermediate proxy, or CDN should retain a copy that another
+//     authenticated user might later receive. no-store is the strictest
+//     variant: no-cache would still permit revalidation, no-store
+//     forbids retention entirely. /healthz and any future static asset
+//     on the root path are unaffected — they're not user-scoped.
+func securityHeaders() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		h := c.Writer.Header()
+		h.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Referrer-Policy", "no-referrer")
+		if strings.HasPrefix(c.Request.URL.Path, "/api/") {
+			h.Set("Cache-Control", "no-store")
+		}
+		c.Next()
+	}
 }
 
 // requestLog is a minimal structured access logger. gin.Logger() is fine
