@@ -38,6 +38,7 @@ What the template abstracts for you: XSUAA client-creds for both the Destination
 8. [What this MWE deliberately does *not* do](#what-this-mwe-deliberately-does-not-do)
 9. [How it works under the hood](#how-it-works-under-the-hood)
 10. [References](#references)
+11. [License](#license)
 
 ## Repository layout
 
@@ -892,3 +893,9 @@ XSUAA client-credentials tokens are cached with a 30 s refresh leeway and collap
 - [SAP Cloud SDK (JS) — on-premise connectivity headers](https://sap.github.io/cloud-sdk/docs/js/features/connectivity/on-premise)
 - [BTP-Python-Template](https://github.com/Hochfrequenz/BTP-Python-Template) — the Python analogue
 - [sap-mcp-config](https://github.com/Hochfrequenz/sap-mcp-config) — source of the eager-validation pattern used in `env.go`
+
+## License
+
+MIT — see [LICENSE](LICENSE). Matches the existing public Hochfrequenz precedent (`adtler` is also MIT). The template's contents are MIT; new code a fork adds on top can be under any licence the fork chooses (your additions, your call).
+
+XML types in `examples/adtcheckrun/handler.go` and `examples/adtdiscovery/handler.go` are adapted from [`Hochfrequenz/adtler`](https://github.com/Hochfrequenz/adtler) (MIT) — attribution is in the source files, not relicensing.
