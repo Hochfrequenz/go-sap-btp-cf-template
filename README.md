@@ -223,6 +223,20 @@ Two things to apply the same discipline to, that are easy to forget:
 - **Query and path parameters.** `c.ShouldBindQuery(&req)` and `c.ShouldBindUri(&req)` take the same struct-tag rules. Do not read raw `c.Query("amount")` and pass it on.
 - **`interface{}` or `json.RawMessage` in a payload.** If the shape genuinely varies, wrap with a typed envelope that selects the variant, validate the envelope, then parse the raw field once the variant is known. An `interface{}` that travels to `svc.CallOnPremise` is a gift to SAP's Short-Dump generator.
 
+#### Body-size cap
+
+`cmd/server/main.go` installs `btp.MaxBodySize(btp.DefaultMaxBodyBytes)` (1 MiB) globally. Any request whose `Content-Length` announces more — or that streams more under chunked / lying-Content-Length — is rejected with a typed `413` envelope (`code: "request_too_large"`) before reaching the Gin binder. The cap protects the app's 128 MiB CF memory quota from a single oversized POST.
+
+For a route that legitimately needs more (large-file import, batch upload), install a per-route override before the handler:
+
+```go
+api.POST("/large-import",
+    btp.MaxBodySize(50<<20), // 50 MiB just for this route
+    importHandler)
+```
+
+The per-route middleware stacks before the handler. If the global cap is in force, it still rejects on the fast path because it ran first — so a per-route override is meaningful only when its limit is **smaller** than the global. To genuinely lift the cap on one route, structure that route under its own router group that does **not** include the global `MaxBodySize`, or raise the global value to the highest legitimate body any route in the app needs.
+
 ---
 
 ### Return errors with a stable envelope
