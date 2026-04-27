@@ -67,6 +67,21 @@ func (d *Destination) IsOnPremise() bool {
 	return d.ProxyType == ProxyOnPremise
 }
 
+// String masks Password so accidental %v / %+v logging cannot leak it.
+// Mirrors the precedent set by *Credentials in env.go.
+func (d *Destination) String() string {
+	if d == nil {
+		return "<nil destination>"
+	}
+	return fmt.Sprintf(
+		"Destination{Name:%s Type:%s URL:%s Authentication:%s ProxyType:%s User:%s Password:*** CloudConnectorLocationId:%s}",
+		d.Name, d.Type, d.URL, d.Authentication, d.ProxyType, d.User, d.CloudConnectorLocationID)
+}
+
+// Format routes %v/%+v/%#v through String() so password scrubbing survives
+// every formatter that callers might reach for in a log line.
+func (d *Destination) Format(s fmt.State, _ rune) { _, _ = fmt.Fprint(s, d.String()) }
+
 // destinationEnvelope matches the /destination-configuration/v1 response.
 // The service wraps the destination in `destinationConfiguration` and adds
 // siblings like `authTokens` we do not use here.

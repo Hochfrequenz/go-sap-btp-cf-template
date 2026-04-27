@@ -2,6 +2,7 @@ package btp_test
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -92,4 +93,31 @@ func Test_LookupDestination_PropagatesServerError(t *testing.T) {
 	_, err := btp.LookupDestination(context.Background(), srv.Client(), cred, "t", "D")
 	then.AssertThat(t, err, is.Not(is.Nil()))
 	then.AssertThat(t, strings.Contains(err.Error(), "500"), is.True())
+}
+
+func Test_Destination_StringScrubsPassword(t *testing.T) {
+	d := &btp.Destination{
+		Name: "MyDest", Type: "HTTP", URL: "http://sap.internal:8000",
+		Authentication: btp.AuthBasic, ProxyType: btp.ProxyOnPremise,
+		User: "u", Password: "super-secret", CloudConnectorLocationID: "loc-1",
+	}
+
+	// Cover %v, %+v, and %#v — all three are formatter routes a caller
+	// might reach for in a log line. Format() funnels every verb through
+	// String() so they all mask.
+	for _, verb := range []string{"%v", "%+v", "%#v"} {
+		s := fmt.Sprintf(verb, d)
+		then.AssertThat(t, strings.Contains(s, "super-secret"), is.False())
+		then.AssertThat(t, strings.Contains(s, "***"), is.True())
+	}
+
+	// slog routes the value through fmt.Sprintf("%+v", v) for non-LogValuer
+	// types; the same masking must hold there.
+	then.AssertThat(t,
+		strings.Contains(fmt.Sprintf("dest=%+v", d), "super-secret"), is.False())
+}
+
+func Test_Destination_NilStringIsSafe(t *testing.T) {
+	var d *btp.Destination
+	then.AssertThat(t, strings.Contains(fmt.Sprintf("%v", d), "nil"), is.True())
 }
