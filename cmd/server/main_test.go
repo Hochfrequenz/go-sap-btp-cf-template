@@ -160,3 +160,49 @@ func Test_requestLog_OmitsQueryStringAndClaims(t *testing.T) {
 	rid, _ := entry["request_id"].(string)
 	then.AssertThat(t, rid != "", is.True())
 }
+
+// Test_securityHeaders_AppliesGlobally pins the headers that go on
+// every response (HSTS, no-sniff, no-referrer). A future change that
+// drops one of these — or moves it behind a route group — trips here.
+func Test_securityHeaders_AppliesGlobally(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(securityHeaders())
+	r.GET("/healthz", func(c *gin.Context) { c.String(http.StatusOK, "ok") })
+
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	then.AssertThat(t, w.Code, is.EqualTo(http.StatusOK))
+	then.AssertThat(t, w.Header().Get("Strict-Transport-Security"),
+		is.EqualTo("max-age=31536000; includeSubDomains"))
+	then.AssertThat(t, w.Header().Get("X-Content-Type-Options"),
+		is.EqualTo("nosniff"))
+	then.AssertThat(t, w.Header().Get("Referrer-Policy"),
+		is.EqualTo("no-referrer"))
+	// /healthz is NOT an /api/ route — Cache-Control should not be set
+	// (the default is whatever the handler chose, here empty).
+	then.AssertThat(t, w.Header().Get("Cache-Control"), is.EqualTo(""))
+}
+
+// Test_securityHeaders_NoStoreOnAPIPaths pins that responses under
+// /api/* carry Cache-Control: no-store. JWTs land in access logs and
+// API bodies can carry user-scoped data; no browser, proxy, or CDN
+// should retain them.
+func Test_securityHeaders_NoStoreOnAPIPaths(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(securityHeaders())
+	r.GET("/api/me", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"ok": true}) })
+
+	req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	then.AssertThat(t, w.Code, is.EqualTo(http.StatusOK))
+	then.AssertThat(t, w.Header().Get("Cache-Control"), is.EqualTo("no-store"))
+	// Other headers stay set on /api/* too.
+	then.AssertThat(t, w.Header().Get("Strict-Transport-Security"),
+		is.EqualTo("max-age=31536000; includeSubDomains"))
+}
