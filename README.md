@@ -11,7 +11,14 @@ Once the BTP prerequisites are in place (see [Deployment](#deployment) — XSUAA
 - calls an **on-premise SAP system** through the **Connectivity + Destination** services (the Cloud Connector three-leg dance), with a **transparent CSRF handshake** on writes — one call on your side, full fetch → attach → retry on ours (the mutating call buffers its request body up-front so the retry can replay it),
 - is built on **Gin** with a `DestinationAuthenticator` registry designed so **Principal Propagation** / SSO / OAuth2 client-credentials can be added as plug-in authenticators without touching the three-leg dance itself. The template ships `NoAuthentication` and `BasicAuthentication`; Principal Propagation specifically plugs in cleanly because the inbound JWT is already stashed under `btp.ForwardedUserTokenKey{}`. Swapping the user-auth layer to Auth0 is a different exercise — it replaces the JWT validator wiring in `cmd/server/main.go`, not a destination authenticator.
 
-**Even as a bare transparent proxy, it earns its keep.** The `/api/sap/:destination/*path` route is deployable after `apply-config` fills in `config.yml` + `vars.yml`, and it abstracts the SAP-side concerns a first-deploy needs: XSUAA client-creds for both the Destination service and the Connectivity service, destination lookup, the proxied on-prem call through the Cloud Connector, Basic auth on the SAP side, CSRF fetch/attach/retry for writes. What it does NOT abstract: destination-service caching, destination-secret rotation, Cloud Connector failover, XSUAA zone/tenant switching — those are follow-up work when they become the bottleneck. A team that wants "hit our on-prem SAP from Cloud Foundry and get the bytes back" can run this template with only the config files edited. A team that wants to decorate the call with typed validation, audit logging, or business logic adds a handler — the BTP plumbing underneath stays the same.
+**The template ships two typed demo endpoints, not a transparent proxy.** Strict typing at the Gin boundary is only consistent with a finite, fixed-path endpoint set — a `/api/sap/:destination/*path` passthrough is by definition untyped (any body, any response). The two shipped routes show the constrained-proxy pattern instead:
+
+- `GET /api/adt-discovery` — reads SAP's ADT service document, parses the ATOM XML, emits a typed JSON view.
+- `POST /api/adt-checkrun` — takes a typed JSON request, builds the SAP-side XML internally, runs an ATC syntax check through the CSRF handshake, parses SAP's XML reply, emits typed JSON.
+
+Both have the destination name and SAP path hard-coded at route registration, validator tags on the request struct, and handler tests that use a one-method fake. The `svc.ProxyHandler` method on `*btp.Service` is still available for forks that explicitly want to wire a transparent proxy — but they're expected to gate it behind `btp.RequireScope("...User")` and accept that typed validation ends at that route. The template's deployed showcase does not expose it.
+
+What the template abstracts for you: XSUAA client-creds for both the Destination service and the Connectivity service, destination lookup, the proxied on-prem call through the Cloud Connector, Basic auth on the SAP side, CSRF fetch/attach/retry for writes. What it does NOT abstract: destination-service caching, destination-secret rotation, Cloud Connector failover, XSUAA zone/tenant switching — follow-ups for when they become the bottleneck.
 
 > **Signpost.** First time here?
 > - Building a new endpoint on top of an existing fork → [Adding your service](#adding-your-service--the-80--case).
@@ -183,7 +190,7 @@ func Handler(svc btp.OnPremCaller) gin.HandlerFunc {
 }
 ```
 
-For a pure pass-through (no pre/post-processing), the existing `/api/sap/:destination/*path` route already does the forwarding — just compose the URL yourself on the caller side. **For anything that writes state on the SAP side, read the next sub-section first** — validation-before-SAP is how you keep on-prem Short Dumps out of your life.
+The template does **not** ship a transparent-proxy route by default — strict typing at the Gin boundary needs a fixed endpoint set, and the security story is much better when every path is explicit. If a fork genuinely wants a catch-all pass-through, `svc.ProxyHandler` is still a method on `*btp.Service`; wire it yourself, gate it with `btp.RequireScope("...User")`, and be deliberate about which users can reach it. **For anything that writes state on the SAP side, read the next sub-section first** — validation-before-SAP is how you keep on-prem Short Dumps out of your life.
 
 Unit-test the handler with the fixtures in `internal/btp/service_test.go`; they stand up stubs that respond like the real XSUAA / Destination / CC stack, so you can assert request shape and response translation without deploying.
 
@@ -209,7 +216,7 @@ type Request struct {
 
 Gin's binding uses [`go-playground/validator`](https://github.com/go-playground/validator); the tag vocabulary covers required / length / regex / enum / cross-field rules (`required_with`, `gtfield`, etc.). For shape-checks beyond the tag language, add a `Validate()` method on the request type and call it right after `ShouldBindJSON`.
 
-> **Do not fool around with raw bytes.** The raw-forward pattern — reading `c.Request.Body` and piping it straight into `svc.CallOnPremise` — is fine **only** for the built-in `/api/sap/:destination/*path` transparent proxy, where the caller is trusted to build whatever payload they mean. For every endpoint you write: unmarshal into a typed struct, validate via struct tags (or an explicit `Validate()`), then marshal the ABAP-side shape yourself. `[]byte` and `json.RawMessage` that travel to `svc.CallOnPremise` unchecked are how SAP ends up with Short Dumps and how you end up debugging across three layers at 23:00.
+> **Do not fool around with raw bytes.** The raw-forward pattern — reading `c.Request.Body` and piping it straight into `svc.CallOnPremise` — is what `svc.ProxyHandler` does and why the template does not wire that route by default (see previous sub-section). For every endpoint you write: unmarshal into a typed struct, validate via struct tags (or an explicit `Validate()`), marshal the ABAP-side shape yourself, and — if SAP returns XML — parse it back into Go structs and emit JSON, the way `examples/adtcheckrun/` and `examples/adtdiscovery/` do. `[]byte` and `json.RawMessage` that travel to `svc.CallOnPremise` unchecked are how SAP ends up with Short Dumps and how you end up debugging across three layers at 23:00.
 
 Two things to apply the same discipline to, that are easy to forget:
 
@@ -410,7 +417,7 @@ If you do hit a wall, [How it works under the hood](#how-it-works-under-the-hood
 
 - **Your Destination uses Principal Propagation, not Basic Auth.** The approuter-forwarded user JWT is stashed in the request context under `btp.ForwardedUserTokenKey{}`; implement a `DestinationAuthenticator` that reads it and sets `SAP-Connectivity-Authentication`. See "Extension points" below.
 - **Your on-prem endpoint needs CSRF tokens for writes** (most ADT writes do). Use `svc.CallOnPremiseMutating` — it runs the `X-CSRF-Token: Fetch` → attach-token-and-cookies → retry-once-on-403 dance transparently. See [Calling SAP with a POST — the CSRF case](#calling-sap-with-a-post--the-csrf-case) below.
-- **`/api/sap/...` returns 502 or an unexpected 401.** See the failure-mode ladder under "Smoke tests" below.
+- **One of the demo endpoints (`/api/adt-discovery`, `/api/adt-checkrun`) returns 502 or an unexpected 401.** See the failure-mode ladder under "Smoke tests" below.
 
 ## Deployment
 
@@ -588,7 +595,7 @@ BTP cockpit → subaccount → Connectivity → **Destinations** → New Destina
 
 | Field | Value |
 | --- | --- |
-| **Name** | `HfSap` (whatever you plan to reference in `/api/sap/<name>/…`) |
+| **Name** | `HfSap` (the destination name your handlers hard-code — e.g. `adtdiscovery` and `adtcheckrun` reference `HF_S4` — plus anything a fork adds) |
 | **Type** | `HTTP` |
 | **URL** | virtual host as exposed by the Cloud Connector (e.g. `http://hfsap.cc:8000`) |
 | **Proxy Type** | `OnPremise` |
@@ -596,7 +603,7 @@ BTP cockpit → subaccount → Connectivity → **Destinations** → New Destina
 | **User / Password** | the SAP account on the on-prem system |
 | **Additional Properties** (optional) | `CloudConnectorLocationId` = `<your location ID>` if you have multiple CCs |
 
-Once this exists, `https://<approuter-host>.<domain>/api/sap/HfSap/<path>` will work. Until it does, `/api/sap/HfSap/...` returns 502 from the Go backend.
+Once this exists (and a handler that references it by name is wired in `buildRouter` — `adtdiscovery` / `adtcheckrun` reference `HF_S4`), calls through that handler will work. Until the destination exists, the handler returns a typed `upstream_unreachable` 502 envelope.
 
 </details>
 
@@ -631,20 +638,20 @@ A `401 invalid token: ... invalid audience` here points at section 7 of this dep
 </details>
 
 <details>
-<summary>6c. <code>/api/sap/&lt;destination&gt;/sap/bc/adt/discovery</code> — full three-leg call to on-prem SAP</summary>
+<summary>6c. <code>/api/adt-discovery</code> — full three-leg call to on-prem SAP</summary>
 
-Simplest: open the URL in the same browser you used for 6b — the approuter session cookie is already set, and the browser will offer the XML body as a download. A 23 KB `*.xml` download is the success signal.
+Simplest: open the URL in the same browser you used for 6b — the approuter session cookie is already set, and the browser will render the JSON response. A compact `{"workspaces":[…]}` payload is the success signal.
 
 If you want `curl` instead, export the approuter session cookie from your browser (DevTools → Application → Cookies → copy `JSESSIONID`, or use a "cookies.txt" browser extension) and pass it via `-b`:
 
 ```sh
 curl -L -b "JSESSIONID=<value-from-devtools>" \
-  https://<approuter-host>.<domain>/api/sap/<destination-name>/sap/bc/adt/discovery
+  https://<approuter-host>.<domain>/api/adt-discovery
 ```
 
-Expected: `200 application/atomsvc+xml` with a body starting `<?xml version="1.0" ... <app:service ...>`. That one call exercises the destination-service lookup, both XSUAA `client_credentials` fetches, the Cloud Connector proxy tunnel, and Basic Auth against the on-premise SAP system — in the three-leg sequence described in the architecture diagram at the bottom of this README.
+Expected: `200 application/json` with a body starting `{"workspaces":[…]}`. That one call exercises the destination-service lookup, both XSUAA `client_credentials` fetches, the Cloud Connector proxy tunnel, and Basic Auth against the on-premise SAP system — in the three-leg sequence described in the architecture diagram at the bottom of this README. Internally, the handler fetches `/sap/bc/adt/discovery` from the destination (returned as XML), parses the ATOM service document, and emits the typed JSON view.
 
-Why `/sap/bc/adt/discovery` as the probe: it's a standard ABAP Development Tools endpoint (used by [`Hochfrequenz/adtler`](https://github.com/Hochfrequenz/adtler) as the CSRF-preflight target), available on any ADT-enabled S/4 system, and reachable by any authenticated ADT developer user — so it rarely trips on fine-grained authorization. If your destination points at a non-S/4 system (for example a HANA XS-only host), substitute an endpoint your destination user has read access to.
+Why `/sap/bc/adt/discovery` as the probe: it's a standard ABAP Development Tools endpoint (used by [`Hochfrequenz/adtler`](https://github.com/Hochfrequenz/adtler) as the CSRF-preflight target), available on any ADT-enabled S/4 system, and reachable by any authenticated ADT developer user — so it rarely trips on fine-grained authorization. If your destination points at a non-S/4 system (for example a HANA XS-only host), change the hard-coded path in `examples/adtdiscovery/handler.go` to something your destination user has read access to.
 
 </details>
 
@@ -769,7 +776,7 @@ sequenceDiagram
     participant CC as Cloud<br/>Connector
     participant SAP as On-premise<br/>SAP system
 
-    Browser->>AR: GET /api/sap/<destination>/...
+    Browser->>AR: GET /api/adt-discovery (or other typed route)
     AR->>XSUAA: OAuth auth-code flow (first time only)
     XSUAA-->>AR: session + JWT
     AR->>Go: forward request with Authorization: Bearer <jwt>

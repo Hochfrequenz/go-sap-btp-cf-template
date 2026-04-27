@@ -167,3 +167,27 @@ func Test_Handler_SurfacesSAPErrorAs502(t *testing.T) {
 	then.AssertThat(t, strings.Contains(w.Body.String(), "on-prem system unreachable"),
 		is.False())
 }
+
+func Test_Register_AttachesPOSTRoute(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(stubJWTClaims(jwt.MapClaims{"user_name": "u@example"}))
+	api := r.Group("/api")
+	fake := &fakeOnPrem{
+		resp: &http.Response{
+			StatusCode:    http.StatusOK,
+			Header:        http.Header{"Content-Type": []string{"application/json"}},
+			Body:          io.NopCloser(strings.NewReader(`{"ok":true}`)),
+			ContentLength: -1,
+		},
+	}
+	invoicesync.Register(api, fake)
+
+	body := `{"company_code":"1000","posting_date":"2026-04-23T00:00:00Z","amount_cents":1,"currency":"EUR"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/invoice-sync", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	then.AssertThat(t, w.Code, is.EqualTo(http.StatusOK))
+}
