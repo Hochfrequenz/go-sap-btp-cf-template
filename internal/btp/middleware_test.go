@@ -1,8 +1,10 @@
 package btp_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -231,6 +233,89 @@ func Test_RequireScope_RejectsWhenMiddlewareAbsent(t *testing.T) {
 	r.ServeHTTP(w, req)
 
 	then.AssertThat(t, w.Code, is.EqualTo(http.StatusForbidden))
+}
+
+// Test_MaxBodySize_RejectsOversizedContentLength pins the fast path:
+// a POST whose Content-Length exceeds the limit is rejected with a
+// typed CodeRequestTooLarge envelope before the body is read at all.
+func Test_MaxBodySize_RejectsOversizedContentLength(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(btp.RequestID(), btp.MaxBodySize(1024)) // 1 KiB cap for the test
+	bodyReadCount := 0
+	r.POST("/x", func(c *gin.Context) {
+		// Should never run — middleware aborts before us.
+		_, _ = io.Copy(io.Discard, c.Request.Body)
+		bodyReadCount++
+		c.String(http.StatusOK, "ok")
+	})
+
+	// 2 KiB body, well over the 1 KiB cap. Use bytes.Repeat to keep the
+	// test source small.
+	body := bytes.Repeat([]byte("A"), 2048)
+	req := httptest.NewRequest(http.MethodPost, "/x", bytes.NewReader(body))
+	req.ContentLength = int64(len(body))
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	then.AssertThat(t, w.Code, is.EqualTo(http.StatusRequestEntityTooLarge))
+	var env btp.ErrorEnvelope
+	then.AssertThat(t, json.Unmarshal(w.Body.Bytes(), &env), is.Nil())
+	then.AssertThat(t, env.Error.Code, is.EqualTo(btp.CodeRequestTooLarge))
+	then.AssertThat(t, env.Error.RequestID != "", is.True())
+	// Handler MUST NOT have run — the whole point of the fast path.
+	then.AssertThat(t, bodyReadCount, is.EqualTo(0))
+}
+
+// Test_MaxBodySize_AllowsBodiesUnderLimit pins that bodies at or under
+// the limit pass through to the handler unchanged.
+func Test_MaxBodySize_AllowsBodiesUnderLimit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(btp.MaxBodySize(1024))
+	r.POST("/x", func(c *gin.Context) {
+		raw, err := io.ReadAll(c.Request.Body)
+		then.AssertThat(t, err, is.Nil())
+		c.String(http.StatusOK, string(raw))
+	})
+
+	body := bytes.Repeat([]byte("B"), 1024) // exactly at the limit
+	req := httptest.NewRequest(http.MethodPost, "/x", bytes.NewReader(body))
+	req.ContentLength = int64(len(body))
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	then.AssertThat(t, w.Code, is.EqualTo(http.StatusOK))
+	then.AssertThat(t, w.Body.Len(), is.EqualTo(1024))
+}
+
+// Test_MaxBodySize_CapsLyingContentLength pins the slow path: a client
+// that sends Content-Length: 0 (or no header at all) but actually
+// streams more than the limit hits the wrapped reader's MaxBytesError.
+// The body never grows past `limit` bytes in memory — that's the
+// invariant this middleware exists for.
+func Test_MaxBodySize_CapsLyingContentLength(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(btp.MaxBodySize(1024))
+	var readErr error
+	var readBytes int
+	r.POST("/x", func(c *gin.Context) {
+		var raw []byte
+		raw, readErr = io.ReadAll(c.Request.Body)
+		readBytes = len(raw)
+		c.String(http.StatusOK, "")
+	})
+
+	body := bytes.Repeat([]byte("C"), 4096) // 4 KiB actual body
+	req := httptest.NewRequest(http.MethodPost, "/x", bytes.NewReader(body))
+	req.ContentLength = -1 // simulate chunked / unknown length
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	// The body read must error and never have read past the cap.
+	then.AssertThat(t, readErr, is.Not(is.Nil()))
+	then.AssertThat(t, readBytes <= 1024, is.True())
 }
 
 // Test_RequestID_PopulatesErrorEnvelope ties the two middlewares

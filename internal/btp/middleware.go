@@ -80,6 +80,57 @@ func newRequestID() string {
 	return hex.EncodeToString(b[:])
 }
 
+// DefaultMaxBodyBytes is the per-request body limit installed by
+// MaxBodySize when no explicit value is given. 1 MiB is well above any
+// JSON payload the template's own handlers send; forks with a route
+// that legitimately needs more should install MaxBodySize per-route
+// with a higher limit (the per-route handler runs before the route's
+// handler reads the body, so its smaller cap takes precedence) or
+// move that route off the global chain entirely.
+const DefaultMaxBodyBytes int64 = 1 << 20
+
+// MaxBodySize caps the request body and surfaces overflow as a typed
+// 413 envelope (CodeRequestTooLarge), not a raw status. Two layers:
+//
+//   - Fast path: the announced Content-Length is over the limit, so
+//     no body bytes are read. Common case for any honest client.
+//   - Slow path: the body is chunked, or the Content-Length is wrong
+//     or absent. Wrap c.Request.Body with http.MaxBytesReader so reads
+//     past the limit fail downstream. Handlers binding via
+//     c.ShouldBindJSON will surface the read failure as their usual
+//     CodeInvalidRequest (400). 400 vs 413 is a quibble in that case
+//     since the client is already misbehaving on transport, and the
+//     important property — the body never grows past `limit` bytes
+//     in memory — holds either way.
+//
+// CF's per-app memory quota is 128 MiB, so without this an
+// authenticated caller can flatten a backend with a single 100 MiB POST.
+// The Gin binder reads the body into memory; btp.Service.CallOnPremiseMutating
+// also buffers the body for the CSRF retry. Both paths are therefore
+// memory-bound by this cap.
+//
+// Forks with a single legitimately larger route should install a
+// per-route override with the appropriate limit:
+//
+//	r.POST("/large-import",
+//	    btp.MaxBodySize(50<<20),  // 50 MiB just for this route
+//	    importHandler)
+//
+// Per-route Use stacks before the handler; if the global Use also
+// installs MaxBodySize, install the smaller of the two first (it
+// rejects on the fast path and short-circuits the bigger one).
+func MaxBodySize(limit int64) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if c.Request.ContentLength > limit {
+			AbortError(c, http.StatusRequestEntityTooLarge, CodeRequestTooLarge,
+				"request body exceeds size limit", nil)
+			return
+		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, limit)
+		c.Next()
+	}
+}
+
 // RequireScope aborts the request with 403 forbidden unless the
 // validated JWT's "scope" claim contains the exact scope string given.
 //

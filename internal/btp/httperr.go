@@ -18,6 +18,7 @@ const (
 	CodeUnauthorized        ErrorCode = "unauthorized"
 	CodeForbidden           ErrorCode = "forbidden"
 	CodeNotFound            ErrorCode = "not_found"
+	CodeRequestTooLarge     ErrorCode = "request_too_large"
 	CodeUpstreamUnreachable ErrorCode = "upstream_unreachable"
 	CodeInternal            ErrorCode = "internal"
 )

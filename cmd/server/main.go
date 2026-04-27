@@ -192,14 +192,21 @@ func buildRouter(validator *btp.JWTValidator, caller btp.OnPremCaller, mutator b
 	_ = r.SetTrustedProxies(nil)
 	// Middleware order matters. Outermost is recoverPanic — its deferred
 	// recover() must wrap every other handler so a panic anywhere in the
-	// chain lands in the typed btp.ErrorEnvelope path rather than
-	// crashing the goroutine. RequestID runs next so the access log and
-	// any AbortError envelope (including the one recoverPanic emits)
-	// carry the same ID. requestLog stays innermost so its deferred
-	// access-log line captures the final response status — anything
-	// running after it would not see status changes its own defer made;
-	// securityHeaders therefore goes immediately before it.
-	r.Use(recoverPanic(), btp.RequestID(), securityHeaders(), requestLog(logger))
+	// chain lands in the typed btp.ErrorEnvelope path. RequestID next so
+	// the access log and any AbortError envelope share the ID. MaxBodySize
+	// sits before any handler that reads the body — an oversized payload
+	// fails fast with a typed 413 rather than reaching the Gin binder
+	// where it would buffer into the app's 128 MiB CF memory quota.
+	// requestLog stays innermost so its deferred access-log line captures
+	// the final response status; securityHeaders sits immediately before
+	// it.
+	r.Use(
+		recoverPanic(),
+		btp.RequestID(),
+		btp.MaxBodySize(btp.DefaultMaxBodyBytes),
+		securityHeaders(),
+		requestLog(logger),
+	)
 
 	r.GET("/healthz", func(c *gin.Context) {
 		c.String(http.StatusOK, "ok")
