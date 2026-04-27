@@ -9,10 +9,9 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
-
-	cfenv "github.com/cloudfoundry-community/go-cfenv"
 )
 
 // ErrNotInCloudFoundry signals that VCAP_APPLICATION / VCAP_SERVICES were
@@ -205,21 +204,34 @@ func (e *Env) Validate() error {
 // runs full validation. Returns ErrNotInCloudFoundry if the app is not
 // running under CF; that case is fatal for this MWE.
 func LoadEnv() (*Env, error) {
-	app, err := cfenv.Current()
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrNotInCloudFoundry, err)
+	// Both env vars must be present to consider the app as running under CF.
+	// We don't actually consume any field of VCAP_APPLICATION — its presence
+	// is the signal we are in a CF runtime; VCAP_SERVICES carries the
+	// bindings we read.
+	if os.Getenv("VCAP_APPLICATION") == "" {
+		return nil, fmt.Errorf("%w: VCAP_APPLICATION is unset", ErrNotInCloudFoundry)
 	}
+	rawServices := os.Getenv("VCAP_SERVICES")
+	if rawServices == "" {
+		return nil, fmt.Errorf("%w: VCAP_SERVICES is unset", ErrNotInCloudFoundry)
+	}
+
+	var services vcapServices
+	if err := json.Unmarshal([]byte(rawServices), &services); err != nil {
+		return nil, fmt.Errorf("parse VCAP_SERVICES: %w", err)
+	}
+
 	e := &Env{}
-	if err := decodeService(app, "xsuaa", &e.XSUAA); err != nil {
+	if err := decodeService(services, "xsuaa", &e.XSUAA); err != nil {
 		return nil, fmt.Errorf("decode xsuaa binding: %w", err)
 	}
 	if e.XSUAA == nil {
 		return nil, ErrNoXSUAABinding
 	}
-	if err := decodeService(app, "destination", &e.Dest); err != nil {
+	if err := decodeService(services, "destination", &e.Dest); err != nil {
 		return nil, fmt.Errorf("decode destination binding: %w", err)
 	}
-	if err := decodeService(app, "connectivity", &e.Conn); err != nil {
+	if err := decodeService(services, "connectivity", &e.Conn); err != nil {
 		return nil, fmt.Errorf("decode connectivity binding: %w", err)
 	}
 	if err := e.Validate(); err != nil {
@@ -228,22 +240,42 @@ func LoadEnv() (*Env, error) {
 	return e, nil
 }
 
+// vcapServices is the typed shape of VCAP_SERVICES. The CF runtime emits
+// it as a JSON object keyed by service-broker label (e.g. "xsuaa",
+// "destination", "connectivity"); each value is an array of bound
+// instances of that service. We only need the first instance's
+// credentials per label this MWE consumes, so the binding type itself
+// is intentionally minimal — anything else CF puts in the binding
+// (name, plan, tags, instance_guid, …) is dropped at parse time.
+//
+// Replaces github.com/cloudfoundry-community/go-cfenv (whose 2020-vintage
+// transitive mapstructure dependency was the rot risk that motivated
+// this change). The on-the-wire shape is stable, so a tiny typed parser
+// gives us the same surface with one fewer dep, no reflection, and no
+// maintenance liability.
+type vcapServices map[string][]vcapBinding
+
+// vcapBinding holds the per-instance credentials. The exact shape of
+// Credentials varies by service (xsuaa is one schema, destination
+// another), so we keep the field as raw JSON and decode into typed
+// structs once we know which label we are looking at.
+type vcapBinding struct {
+	Credentials json.RawMessage `json:"credentials"`
+}
+
 // decodeService decodes the first binding with the given label into out.
 // If no binding exists, out is left as nil. Distinguishing "binding absent"
 // from "decode failed" matters because Env.Validate wants to report missing
 // required bindings itself (with the same error shape as other problems).
-func decodeService(app *cfenv.App, label string, out any) error {
-	services, err := app.Services.WithLabel(label)
-	if err != nil || len(services) == 0 {
-		// go-cfenv returns an error when no services match the label,
-		// which we treat as "absent", not "failure".
+func decodeService(services vcapServices, label string, out any) error {
+	bindings, ok := services[label]
+	if !ok || len(bindings) == 0 {
 		return nil
 	}
-	raw, err := json.Marshal(services[0].Credentials)
-	if err != nil {
-		return fmt.Errorf("marshal %s credentials: %w", label, err)
+	if len(bindings[0].Credentials) == 0 {
+		return fmt.Errorf("%s binding has empty credentials", label)
 	}
-	return json.Unmarshal(raw, out)
+	return json.Unmarshal(bindings[0].Credentials, out)
 }
 
 func trimSlash(s string) string {

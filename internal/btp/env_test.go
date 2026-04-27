@@ -187,13 +187,39 @@ func Test_Conn_ValidateRequiresAllFields(t *testing.T) {
 
 func Test_LoadEnv_MalformedCredentialsJSONErrors(t *testing.T) {
 	// "url" is spelled correctly but credentials are a primitive instead of
-	// an object — cfenv will surface the marshal/unmarshal failure.
+	// an object — the typed parser surfaces this as an unmarshal failure.
 	t.Setenv("VCAP_APPLICATION", vcapAppJSON)
 	t.Setenv("VCAP_SERVICES", `{
 		"xsuaa":[{"label":"xsuaa","name":"x","credentials":"not-an-object"}]
 	}`)
 	_, err := btp.LoadEnv()
 	then.AssertThat(t, err, is.Not(is.Nil()))
+}
+
+// Test_LoadEnv_MalformedVCAPServicesErrors pins the parse-failure path
+// for the typed VCAP parser (post go-cfenv removal). A non-JSON
+// VCAP_SERVICES env var must surface a parse error, not silently fall
+// through into "no bindings" → ErrNoXSUAABinding which would mask the
+// real misconfiguration.
+func Test_LoadEnv_MalformedVCAPServicesErrors(t *testing.T) {
+	t.Setenv("VCAP_APPLICATION", vcapAppJSON)
+	t.Setenv("VCAP_SERVICES", `{not valid json`)
+	_, err := btp.LoadEnv()
+	then.AssertThat(t, err, is.Not(is.Nil()))
+	// Distinct error message — must mention parsing, not "binding missing".
+	then.AssertThat(t, strings.Contains(err.Error(), "parse VCAP_SERVICES"), is.True())
+}
+
+// Test_LoadEnv_FailsWithoutVCAPApplication pins that VCAP_SERVICES alone
+// is insufficient to consider the app "in CF" — both env vars are
+// required. A missing VCAP_APPLICATION typically signals a buildpack
+// misconfiguration; failing fast here is preferable to running with
+// undefined behavior.
+func Test_LoadEnv_FailsWithoutVCAPApplication(t *testing.T) {
+	t.Setenv("VCAP_APPLICATION", "")
+	t.Setenv("VCAP_SERVICES", `{"xsuaa":[]}`)
+	_, err := btp.LoadEnv()
+	then.AssertThat(t, errors.Is(err, btp.ErrNotInCloudFoundry), is.True())
 }
 
 func Test_RejectingAuthenticator_TypeIsStar(t *testing.T) {
