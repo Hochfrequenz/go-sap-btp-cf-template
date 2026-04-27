@@ -752,6 +752,19 @@ Shipped out of the box: `AuthNone` and `AuthBasic`, plus a rejecting fallback so
 
 For Principal Propagation specifically: the approuter-forwarded user JWT is stashed in the request context under `btp.ForwardedUserTokenKey{}` — a PP authenticator reads it from there and sets `SAP-Connectivity-Authentication`.
 
+### HTTP server timeouts
+
+`cmd/server/main.go` sets four slow-client timeouts on the `http.Server`:
+
+| Setting             | Default | Why                                                       |
+| ------------------- | ------- | --------------------------------------------------------- |
+| `ReadHeaderTimeout` | 10 s    | Slowloris on request headers.                             |
+| `ReadTimeout`       | 60 s    | Slow-body POSTs (e.g. `/api/adt-checkrun`).               |
+| `WriteTimeout`      | 60 s    | Stalled reader pinning a handler that's streaming a body. |
+| `IdleTimeout`       | 120 s   | Keep-alive sockets parked indefinitely.                   |
+
+60 s on `ReadTimeout` / `WriteTimeout` is sized for the slowest legitimate path the template ships: `/api/adt-checkrun` goes through the CSRF handshake plus the on-prem hop and can take 30 s+. If a fork adds a handler that legitimately needs more (large-file streaming, long-poll), keep this default and run that handler on its own `http.Server` instance with a relaxed timeout there — looser global timeouts re-open the slow-client surface for every other route.
+
 ## What this MWE deliberately does *not* do
 
 - **No fake `Mozilla/5.0` User-Agent.** The PHP/Python reference impersonates a browser as a HF-SAP workaround; the SAP BTP spec has no such requirement.

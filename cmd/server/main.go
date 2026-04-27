@@ -55,10 +55,31 @@ func main() {
 	if port == "" {
 		port = "8080"
 	}
+	// The four timeouts cover four distinct slow-client failure modes;
+	// any one missing leaves a goroutine leak vector against a backend
+	// that is directly internet-reachable on its .cfapps.* route (not
+	// only behind the approuter):
+	//
+	//   - ReadHeaderTimeout (10s):  Slowloris on request headers.
+	//   - ReadTimeout       (60s):  Slow-body POSTs (e.g. /api/adt-checkrun).
+	//   - WriteTimeout      (60s):  A stalled reader pinning a goroutine
+	//                               while the handler streams a response.
+	//   - IdleTimeout      (120s):  Keep-alive sockets parked indefinitely.
+	//
+	// 60s on Read/Write is sized for the slowest legitimate path:
+	// /api/adt-checkrun goes through the CSRF handshake plus the on-prem
+	// hop and can take 30s+; 60s leaves margin without normalising
+	// genuinely degraded SAP responses. A handler that legitimately needs
+	// more (large file streaming, long-poll) should run on its own
+	// http.Server instance with the timeout relaxed there, rather than
+	// loosening this default.
 	srv := &http.Server{
 		Addr:              ":" + port,
 		Handler:           r,
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       60 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	// Runtime server failures land on serverErr; signal shutdowns land
