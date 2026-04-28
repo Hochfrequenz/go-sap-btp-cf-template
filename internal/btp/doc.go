@@ -68,6 +68,14 @@
 //
 //   - [ErrNoDestinationBinding], [ErrNoConnectivityBinding], [ErrNoXSUAABinding]
 //   - [ErrDestinationNotFound], [ErrNotInCloudFoundry]
+//   - [ErrOnPremResponseTooLarge]
+//
+// ## On-prem failure classification
+//
+//   - [OnPremFailureKind] — typed classifier; stable wire format
+//   - [OnPremFailureDestinationNotFound], [OnPremFailureResponseTooLarge],
+//     [OnPremFailureTimeout], [OnPremFailureCanceled], [OnPremFailureTransport]
+//   - [ClassifyOnPremError] — (kind, detail) for huma 502 envelopes
 //
 // # Template-internal (do NOT depend on from outside this package)
 //

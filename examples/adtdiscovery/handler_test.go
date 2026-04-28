@@ -17,6 +17,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/hochfrequenz/go-sap-btp-cf-template/examples/adtdiscovery"
+	"github.com/hochfrequenz/go-sap-btp-cf-template/internal/btp"
 )
 
 // fakeCaller mirrors the OnPremCaller pattern used elsewhere in
@@ -135,7 +136,8 @@ func Test_Handler_CallsCorrectSAPPath(t *testing.T) {
 // path. huma renders errors as the RFC 7807 problem-details model
 // (Title, Status, Detail) — different shape from the gin-style
 // btp.ErrorEnvelope used elsewhere in the template. The status is
-// what callers switch on; the detail carries the user-safe message.
+// what callers switch on; the detail carries the user-safe message
+// classified by btp.ClassifyOnPremError.
 func Test_Handler_SurfacesUpstreamErrorAs502(t *testing.T) {
 	fake := &fakeCaller{err: errors.New("on-prem system unreachable")}
 	r := newRouter(fake)
@@ -148,11 +150,30 @@ func Test_Handler_SurfacesUpstreamErrorAs502(t *testing.T) {
 	var env huma.ErrorModel
 	then.AssertThat(t, json.Unmarshal(w.Body.Bytes(), &env), is.Nil())
 	then.AssertThat(t, env.Status, is.EqualTo(http.StatusBadGateway))
-	then.AssertThat(t, env.Detail, is.EqualTo("on-premise call failed"))
+	// errors.New(...) has no recognised sentinel → transport-error branch.
+	then.AssertThat(t, env.Detail, is.EqualTo("on-premise transport error"))
 	// No leakage of Go error text — the underlying err is captured
 	// for operator side, not surfaced in the envelope.
 	then.AssertThat(t,
 		strings.Contains(w.Body.String(), "on-prem system unreachable"), is.False())
+}
+
+// Test_Handler_ClassifiesDestinationNotFoundAs502 pins that the
+// classifier's destination-not-found branch reaches the wire — proves
+// the handler delegates to btp.ClassifyOnPremError rather than emitting
+// a single constant detail for every error.
+func Test_Handler_ClassifiesDestinationNotFoundAs502(t *testing.T) {
+	fake := &fakeCaller{err: btp.ErrDestinationNotFound}
+	r := newRouter(fake)
+
+	req := httptest.NewRequest(http.MethodGet, "/adt-discovery", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	then.AssertThat(t, w.Code, is.EqualTo(http.StatusBadGateway))
+	var env huma.ErrorModel
+	then.AssertThat(t, json.Unmarshal(w.Body.Bytes(), &env), is.Nil())
+	then.AssertThat(t, env.Detail, is.EqualTo("destination not found"))
 }
 
 func Test_Handler_SurfacesMalformedXMLAs502(t *testing.T) {
