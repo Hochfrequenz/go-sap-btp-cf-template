@@ -630,6 +630,8 @@ The shipped `xs-security.json` has an empty `redirect-uris` array — we cannot 
 
 Skipping this yields "redirect URI mismatch" on the first OAuth login.
 
+> **Safety net.** Forgetting the `git restore` is caught by `.github/workflows/template-guards.yml` before merge: the gate fails CI if `xs-security.json` carries a non-empty `redirect-uris`. Without that gate, a single tainted commit would silently propagate a deploy-specific URL into every downstream fork's starting state.
+
 </details>
 
 <details>
