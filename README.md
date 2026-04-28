@@ -88,7 +88,18 @@ Properties of the tool:
 - **Fails loudly.** Each file rewriter asserts its expected shape; a drifted target returns a clear error instead of silently producing garbage.
 - **Zero internal dependencies.** The tool imports nothing from `internal/`, so it keeps working even while it's rewriting import paths.
 
-`README.md` and `docs/btp-deploy-walkthrough.de.md` are **not** rewritten by the tool — they describe the original Hochfrequenz deployment and are meant to read as HF-flavoured prose. Strip or replace them in your fork as you see fit.
+### Not rewritten — manual fork chores
+
+`apply-config` does not touch HF-specific values that are upstream attribution, per-fork ownership, or HF-flavoured prose — those are intentional and a fork-author should review (and likely replace) them deliberately. The list below is what survives `apply-config` on a freshly-forked tree, with the `rg` command to locate each:
+
+| Item | Where | How to find | Why not rewritten |
+| --- | --- | --- | --- |
+| README prose | `README.md` | reading | HF-flavoured by intent; documents the running deploy. Strip or replace as your fork sees fit. |
+| Walkthrough | `docs/btp-deploy-walkthrough.de.md` | reading | German + chronological deploy diary; HF-specific by design. |
+| `LICENSE` copyright line | `LICENSE` | `rg Hochfrequenz LICENSE` | Upstream attribution; usually keep + add your own copyright above. |
+| `CODEOWNERS` reviewer team | `.github/CODEOWNERS` | `rg Hochfrequenz .github/CODEOWNERS` | Per-fork ownership; replace `@Hochfrequenz/go-review-team` with your team. |
+
+`.github/workflows/template-guards.yml` runs each documented `rg` pattern against the upstream tree on every PR — if a row's pattern stops matching anything on this repo, the gate fails. That surfaces bit-rot (item removed without doc update) before the list quietly goes stale; forks that strip an item legitimately can drop the row from the table or relax the gate.
 
 ## Adding your service — the 80 % case
 
