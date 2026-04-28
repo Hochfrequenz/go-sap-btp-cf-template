@@ -120,10 +120,14 @@ func Handler(svc btp.OnPremCaller) func(context.Context, *DiscoveryInput) (*Disc
 		if err != nil {
 			// huma's default NewError attaches `errs[].Error()` to the
 			// response body — which would leak the underlying Go error
-			// text to the client. Log it server-side (operator context),
-			// surface only the safe user-message (client contract).
-			slog.ErrorContext(ctx, "adt-discovery on-premise call failed", "err", err)
-			return nil, huma.Error502BadGateway("on-premise call failed")
+			// text to the client. Log the raw err server-side (operator
+			// context); surface only the safe, classified detail (client
+			// contract). The kind also lands in slog so operators can
+			// grep / aggregate by it.
+			kind, detail := btp.ClassifyOnPremError(err)
+			slog.ErrorContext(ctx, "adt-discovery on-premise call failed",
+				"kind", kind, "err", err)
+			return nil, huma.Error502BadGateway(detail)
 		}
 		defer func() { _ = resp.Body.Close() }()
 
