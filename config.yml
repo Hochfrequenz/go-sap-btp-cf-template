@@ -9,7 +9,8 @@
 #
 # `apply-config` rewrites: go.mod, every Go import path, manifest.yml
 # service bindings, xs-security.json xsappname, vars.example.yml,
-# web/package.json name field, and .github/workflows/deploy.yml env block.
+# web/package.json name field, .github/workflows/deploy.yml env block,
+# and the destination-name literal across examples/**/*.go.
 #
 # The README prose stays HF-flavoured on purpose; it documents the
 # running deploy, not the current state of the fork.
@@ -30,6 +31,15 @@ services:
   xsuaa:        go-xsuaa
   destination:  go-dest
   connectivity: go-cc
+
+# Hard-coded literals that surface inside `examples/`. apply-config
+# rewrites every quoted occurrence across examples/**/*.go (handlers
+# AND tests) so a fork's first run leaves no HF-specific names behind.
+# Leave blank to default to "HF_S4" — the value in HF's own deploy.
+examples:
+  # The BTP destination name your example handlers reference.
+  # Match it to the destination you create in your subaccount.
+  destination_name: HF_S4
 
 # CF landscape coordinates used by the release-triggered CD workflow
 # (.github/workflows/deploy.yml). Match your BTP subaccount.

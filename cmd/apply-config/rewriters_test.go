@@ -339,6 +339,105 @@ import (
 	}
 }
 
+func Test_planExamplesDestination_RewritesQuotedLiteralAcrossExamples(t *testing.T) {
+	// Setup throwaway examples/ tree:
+	//   examples/foo/handler.go      — has destinationName = "HF_S4" + a usage
+	//   examples/foo/handler_test.go — asserts is.EqualTo("HF_S4")
+	//   examples/bar/handler.go      — no HF_S4 anywhere
+	dir := t.TempDir()
+	writeFile := func(rel, content string) {
+		full := filepath.Join(dir, rel)
+		then.AssertThat(t, os.MkdirAll(filepath.Dir(full), 0755), is.Nil())
+		then.AssertThat(t, os.WriteFile(full, []byte(content), 0644), is.Nil())
+	}
+	writeFile("examples/foo/handler.go",
+		`package foo
+
+const (
+	destinationName = "HF_S4"
+	sapPath         = "/sap/bc/adt/discovery"
+)
+
+var x = destinationName // uses the const, not the literal directly
+`)
+	writeFile("examples/foo/handler_test.go",
+		`package foo_test
+
+import "testing"
+
+func Test_X(t *testing.T) {
+	if got := "HF_S4"; got != "HF_S4" {
+		t.Fail()
+	}
+}
+`)
+	writeFile("examples/bar/handler.go",
+		`package bar
+
+func Hello() string { return "hello" }
+`)
+
+	cfg := testConfig()
+	cfg.Examples.DestinationName = "ACME_S4"
+	plan, err := planExamplesDestination(dir, cfg)
+	then.AssertThat(t, err, is.Nil())
+
+	// foo/handler.go is rewritten: "HF_S4" → "ACME_S4" (twice — const + assertion)
+	_, fooHandlerAfter := planResultFor(t, plan, "examples/foo/handler.go")
+	then.AssertThat(t, strings.Contains(fooHandlerAfter, `"ACME_S4"`), is.True())
+	then.AssertThat(t, strings.Contains(fooHandlerAfter, `"HF_S4"`), is.False())
+
+	// foo/handler_test.go is rewritten too
+	_, fooTestAfter := planResultFor(t, plan, "examples/foo/handler_test.go")
+	then.AssertThat(t, strings.Contains(fooTestAfter, `"ACME_S4"`), is.True())
+	then.AssertThat(t, strings.Contains(fooTestAfter, `"HF_S4"`), is.False())
+
+	// bar/handler.go is in the plan but unchanged (Before == After)
+	barBefore, barAfter := planResultFor(t, plan, "examples/bar/handler.go")
+	then.AssertThat(t, barBefore, is.EqualTo(barAfter))
+
+	// PLAN, not write — on-disk file must still have HF_S4.
+	ondisk, _ := os.ReadFile(filepath.Join(dir, "examples", "foo", "handler.go"))
+	then.AssertThat(t, strings.Contains(string(ondisk), "HF_S4"), is.True())
+	then.AssertThat(t, strings.Contains(string(ondisk), "ACME_S4"), is.False())
+}
+
+func Test_planExamplesDestination_NoOpWhenAlreadyMatches(t *testing.T) {
+	// After fork: code already says my-dest, config says my-dest, plan
+	// should be all no-ops (Before == After everywhere).
+	dir := t.TempDir()
+	writeFile := func(rel, content string) {
+		full := filepath.Join(dir, rel)
+		then.AssertThat(t, os.MkdirAll(filepath.Dir(full), 0755), is.Nil())
+		then.AssertThat(t, os.WriteFile(full, []byte(content), 0644), is.Nil())
+	}
+	writeFile("examples/foo/handler.go",
+		`package foo
+
+const destinationName = "my-dest"
+`)
+
+	cfg := testConfig()
+	cfg.Examples.DestinationName = "my-dest"
+	plan, err := planExamplesDestination(dir, cfg)
+	then.AssertThat(t, err, is.Nil())
+
+	for _, p := range plan {
+		then.AssertThat(t, string(p.result.Before), is.EqualTo(string(p.result.After)))
+	}
+}
+
+func Test_planExamplesDestination_NoOpWhenNoExamplesDir(t *testing.T) {
+	// Fork has deleted examples/. Rewriter should return cleanly with
+	// an empty plan — there's nothing to rewrite.
+	dir := t.TempDir() // no examples/ subdir
+	cfg := testConfig()
+	cfg.Examples.DestinationName = "ACME_S4"
+	plan, err := planExamplesDestination(dir, cfg)
+	then.AssertThat(t, err, is.Nil())
+	then.AssertThat(t, len(plan), is.EqualTo(0))
+}
+
 func Test_Run_IsAtomicWhenATransformFails(t *testing.T) {
 	// Phase-2 write must not run if any Phase-1 Transform errors. Set
 	// up a tree where go.mod is fine but manifest.yml is intentionally

@@ -18,7 +18,22 @@ import (
 type Config struct {
 	App      AppConfig      `yaml:"app"`
 	Services ServicesConfig `yaml:"services"`
+	Examples ExamplesConfig `yaml:"examples"`
 	CF       CFConfig       `yaml:"cf"`
+}
+
+// ExamplesConfig holds fork-customisable values that surface as
+// hard-coded literals inside `examples/`. Today the only field is the
+// destination name a fork will configure on their own BTP subaccount —
+// the literal that example handlers pass to svc.CallOnPremise / etc.
+//
+// Defaults to "HF_S4" so a fork that has not opted into renaming yet
+// keeps working unchanged after pulling apply-config updates.
+type ExamplesConfig struct {
+	// DestinationName is the BTP destination name the example handlers
+	// reference. Replaces every occurrence of the prior literal in
+	// `examples/**/*.go` (handlers + tests).
+	DestinationName string `yaml:"destination_name"`
 }
 
 // AppConfig identifies the CF backend app and the Go module it lives in.
@@ -83,6 +98,13 @@ func (c *Config) applyDefaults() {
 	c.Services.XSUAA = strings.TrimSpace(c.Services.XSUAA)
 	c.Services.Destination = strings.TrimSpace(c.Services.Destination)
 	c.Services.Connectivity = strings.TrimSpace(c.Services.Connectivity)
+	c.Examples.DestinationName = strings.TrimSpace(c.Examples.DestinationName)
+	if c.Examples.DestinationName == "" {
+		// Default to the historical literal so configs without the
+		// `examples:` block keep working. Forks override by setting
+		// `examples.destination_name` in their config.yml.
+		c.Examples.DestinationName = "HF_S4"
+	}
 	c.CF.API = strings.TrimSpace(c.CF.API)
 	c.CF.Org = strings.TrimSpace(c.CF.Org)
 	c.CF.Space = strings.TrimSpace(c.CF.Space)

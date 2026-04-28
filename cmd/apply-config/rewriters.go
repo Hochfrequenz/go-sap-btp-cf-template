@@ -125,6 +125,17 @@ func Run(root string, cfg *Config, dryRun bool) (*Result, error) {
 		res.Rewriters = append(res.Rewriters, p.result)
 	}
 
+	// Walk examples/ for the destination-name literal. Same plan-not-
+	// write contract as planGoImports — Phase-2 atomicity preserved.
+	examplesPlan, err := planExamplesDestination(root, cfg)
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range examplesPlan {
+		plan = append(plan, p)
+		res.Rewriters = append(res.Rewriters, p.result)
+	}
+
 	// --- Phase 2: write. Only reached if every Transform in Phase 1
 	// succeeded, so a half-applied tree is impossible. ---
 	if dryRun {
@@ -355,6 +366,112 @@ func planGoImports(root, oldModule string, cfg *Config) ([]pending, error) {
 		return nil
 	})
 	return out, err
+}
+
+// --- examples destination-name walker ----------------------------------
+
+// planExamplesDestination finds every *.go file under examples/, replaces
+// every quoted occurrence of the current destination-name literal with
+// the configured `examples.destination_name`, and returns a plan of
+// per-file rewrites. The "current" literal is discovered by looking for
+// a `destinationName = "..."` constant in the first matching file
+// (alphabetical walk) — same source-of-truth pattern as planGoImports
+// reading go.mod for the current module path.
+//
+// No files are written — callers (Run) decide whether to commit the
+// plan, so a failure elsewhere cannot leave the tree half-applied.
+//
+// Edge cases:
+//   - examples/ doesn't exist (fork removed it): returns empty plan, no error.
+//   - no .go file under examples/ has a `destinationName = "..."` constant:
+//     returns empty plan, no error — there's nothing for the rewriter to do.
+//   - current literal already matches `cfg.Examples.DestinationName`:
+//     plan still includes every file (Before == After), Run skips the writes.
+func planExamplesDestination(root string, cfg *Config) ([]pending, error) {
+	examplesDir := filepath.Join(root, "examples")
+	info, err := os.Stat(examplesDir)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("stat examples dir: %w", err)
+	}
+	if !info.IsDir() {
+		return nil, nil
+	}
+
+	current, err := discoverCurrentExamplesDestination(examplesDir)
+	if err != nil {
+		return nil, err
+	}
+	if current == "" {
+		// No `destinationName = "..."` const found anywhere under
+		// examples/. Nothing for this rewriter to do.
+		return nil, nil
+	}
+	desired := cfg.Examples.DestinationName
+
+	re := regexp.MustCompile(`"` + regexp.QuoteMeta(current) + `"`)
+	replacement := []byte(`"` + desired + `"`)
+
+	var out []pending
+	err = filepath.WalkDir(examplesDir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if !strings.HasSuffix(p, ".go") {
+			return nil
+		}
+		old, readErr := os.ReadFile(p)
+		if readErr != nil {
+			return readErr
+		}
+		newContent := re.ReplaceAll(old, replacement)
+		rel, _ := filepath.Rel(root, p)
+		out = append(out, pending{
+			absPath: p,
+			result: RewriterResult{
+				Name:   "examples destination",
+				Path:   rel,
+				Before: old,
+				After:  newContent,
+			},
+		})
+		return nil
+	})
+	return out, err
+}
+
+// discoverCurrentExamplesDestination walks examplesDir alphabetically
+// and returns the first `destinationName = "..."` literal it finds in
+// any *.go file. Returns "" with nil error when none is found — the
+// caller treats that as a "no-op" signal, not an error.
+func discoverCurrentExamplesDestination(examplesDir string) (string, error) {
+	re := regexp.MustCompile(`destinationName\s*=\s*"([^"]+)"`)
+	var found string
+	err := filepath.WalkDir(examplesDir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || !strings.HasSuffix(p, ".go") {
+			return nil
+		}
+		if found != "" {
+			return nil // already found; let walk finish so SkipAll isn't needed
+		}
+		raw, readErr := os.ReadFile(p)
+		if readErr != nil {
+			return readErr
+		}
+		if m := re.FindSubmatch(raw); m != nil {
+			found = string(m[1])
+		}
+		return nil
+	})
+	return found, err
 }
 
 // --- helpers -----------------------------------------------------------

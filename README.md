@@ -66,7 +66,7 @@ vars.example.yml            template for cf push --vars-file vars.yml
 
 ## Using this repo as a template
 
-All per-deployment string values (app name, Go module path, CF subaccount coordinates, service instance names) live in a single `config.yml` at the repo root. `cmd/apply-config` is a small Go tool that reads that file, type-checks every field, and rewrites the rest of the tree from it — `go.mod`, every Go import, `manifest.yml`, `xs-security.json`, `vars.example.yml`, `web/package.json`, and `.github/workflows/deploy.yml`.
+All per-deployment string values (app name, Go module path, CF subaccount coordinates, service instance names, **example-handler destination name**) live in a single `config.yml` at the repo root. `cmd/apply-config` is a small Go tool that reads that file, type-checks every field, and rewrites the rest of the tree from it — `go.mod`, every Go import, `manifest.yml`, `xs-security.json`, `vars.example.yml`, `web/package.json`, `.github/workflows/deploy.yml`, and the destination-name literal across `examples/**/*.go`.
 
 Recommended flow after forking:
 

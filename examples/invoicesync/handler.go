@@ -53,8 +53,10 @@ func Register(api *gin.RouterGroup, svc btp.OnPremCaller) {
 // up the XSUAA / Destination / Cloud Connector stack. See
 // handler_test.go in this package for the canonical mock pattern.
 func Handler(svc btp.OnPremCaller) gin.HandlerFunc {
-	// destinationName would usually come from configuration or a route
-	// parameter; hard-coded here so the example stays self-contained.
+	// FORK: "HF_S4" is the name of Hochfrequenz's on-prem destination.
+	// apply-config rewrites this literal across examples/**/*.go via
+	// `examples.destination_name` in config.yml — change config.yml,
+	// re-run apply-config, this constant updates with everything else.
 	const destinationName = "HF_S4"
 
 	return func(c *gin.Context) {
