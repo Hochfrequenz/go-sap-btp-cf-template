@@ -134,7 +134,7 @@ func Handler(svc btp.OnPremCaller) func(context.Context, *DiscoveryInput) (*Disc
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			slog.ErrorContext(ctx, "adt-discovery on-premise non-2xx",
 				"status", resp.StatusCode)
-			return nil, huma.Error502BadGateway("on-premise call returned non-2xx")
+			return nil, huma.Error502BadGateway(btp.OnPremNon2xxDetail(resp.StatusCode))
 		}
 
 		raw, err := io.ReadAll(resp.Body)

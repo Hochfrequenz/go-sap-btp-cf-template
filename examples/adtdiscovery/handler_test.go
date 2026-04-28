@@ -212,6 +212,9 @@ func Test_Handler_SurfacesNon2xxAs502(t *testing.T) {
 	var env huma.ErrorModel
 	then.AssertThat(t, json.Unmarshal(w.Body.Bytes(), &env), is.Nil())
 	then.AssertThat(t, env.Status, is.EqualTo(http.StatusBadGateway))
+	// SAP HTTP status surfaces in the detail — the diagnosability
+	// fix from issue #68 motivated by PR #67's 400-from-SAP debug pain.
+	then.AssertThat(t, env.Detail, is.EqualTo("on-premise system returned HTTP 500"))
 }
 
 // errReader returns a controlled error from Read so the io.ReadAll
