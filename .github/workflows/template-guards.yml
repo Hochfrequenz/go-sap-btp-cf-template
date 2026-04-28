@@ -225,6 +225,22 @@ jobs:
             exit 1
           fi
 
+      - name: CLAUDE.md must exist at repo root
+        run: |
+          set -euo pipefail
+          # CLAUDE.md is the project's AI-orientation entry point —
+          # rules + pointers an AI assistant reads on every prompt to
+          # stay on-rails. Forks that strip it lose the safety net for
+          # AI-assisted handler authoring (especially relevant where
+          # the fork-author leans on AI to bridge a Go-fluency gap).
+          # Bit-rot prevention same shape as the manual-fork-chores
+          # gate below — file disappears, CI fires.
+          if [ ! -f CLAUDE.md ]; then
+            echo "::error::CLAUDE.md missing from repo root." >&2
+            echo "::error::This file is the project's AI-orientation entry point — see README §'Using this repo as a template'." >&2
+            exit 1
+          fi
+
       - name: README "manual fork chores" rg patterns must each match >0
         run: |
           set -euo pipefail

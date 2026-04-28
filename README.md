@@ -68,6 +68,8 @@ vars.example.yml            template for cf push --vars-file vars.yml
 
 All per-deployment string values (app name, Go module path, CF subaccount coordinates, service instance names, **example-handler destination name**) live in a single `config.yml` at the repo root. `cmd/apply-config` is a small Go tool that reads that file, type-checks every field, and rewrites the rest of the tree from it — `go.mod`, every Go import, `manifest.yml`, `xs-security.json`, `vars.example.yml`, `web/package.json`, `.github/workflows/deploy.yml`, and the destination-name literal across `examples/**/*.go`.
 
+> **Using AI assistance to navigate this template?** Start with [`CLAUDE.md`](CLAUDE.md) at the repo root — rules + pointers an AI assistant reads on every prompt to stay on-rails (handler placement, forbidden patterns, where things live). The README stays the human-facing reference; `CLAUDE.md` is its AI-facing companion.
+
 Recommended flow after forking:
 
 ```sh
