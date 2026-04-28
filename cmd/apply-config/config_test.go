@@ -128,6 +128,67 @@ func Test_LoadConfig_MissingFile(t *testing.T) {
 	then.AssertThat(t, strings.Contains(err.Error(), "read"), is.True())
 }
 
+func Test_LoadConfig_DefaultsExamplesDestinationToHF_S4(t *testing.T) {
+	// Backward compat: a config.yml without the examples block should
+	// keep the historical literal so existing forks' apply-config runs
+	// stay no-op on first re-run after this PR lands. Forks that want
+	// to rename set examples.destination_name explicitly.
+	path := writeTemp(t, `
+app:
+  name: ok
+  module: github.com/acme/ok
+cf:
+  api: https://api.cf.eu10.hana.ondemand.com
+  org: O
+  space: dev
+  domain: cfapps.eu10.hana.ondemand.com
+`)
+	cfg, err := LoadConfig(path)
+	then.AssertThat(t, err, is.Nil())
+	then.AssertThat(t, cfg.Examples.DestinationName, is.EqualTo("HF_S4"))
+}
+
+func Test_LoadConfig_AcceptsCustomExamplesDestination(t *testing.T) {
+	path := writeTemp(t, `
+app:
+  name: ok
+  module: github.com/acme/ok
+examples:
+  destination_name: my-dest
+cf:
+  api: https://api.cf.eu10.hana.ondemand.com
+  org: O
+  space: dev
+  domain: cfapps.eu10.hana.ondemand.com
+`)
+	cfg, err := LoadConfig(path)
+	then.AssertThat(t, err, is.Nil())
+	then.AssertThat(t, cfg.Examples.DestinationName, is.EqualTo("my-dest"))
+}
+
+func Test_LoadConfig_RejectsEmptyExamplesDestinationWhenSet(t *testing.T) {
+	// An explicitly-set empty string should fail — the trimmed-then-
+	// blank-check pattern other fields use. Whitespace-only counts as
+	// empty.
+	path := writeTemp(t, `
+app:
+  name: ok
+  module: github.com/acme/ok
+examples:
+  destination_name: "   "
+cf:
+  api: https://api.cf.eu10.hana.ondemand.com
+  org: O
+  space: dev
+  domain: cfapps.eu10.hana.ondemand.com
+`)
+	cfg, err := LoadConfig(path)
+	// applyDefaults trims whitespace; if the result is empty, it should
+	// fall back to the default rather than error — same as services.
+	then.AssertThat(t, err, is.Nil())
+	then.AssertThat(t, cfg.Examples.DestinationName, is.EqualTo("HF_S4"))
+}
+
 func Test_LoadConfig_TrimsWhitespaceOnAllFields(t *testing.T) {
 	// Whitespace-only values should read as empty — otherwise the
 	// blank-check would skip validation and let "   " slip through.
