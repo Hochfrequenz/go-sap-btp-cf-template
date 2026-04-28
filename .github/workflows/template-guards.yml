@@ -225,6 +225,32 @@ jobs:
             exit 1
           fi
 
+      - name: README "manual fork chores" rg patterns must each match >0
+        run: |
+          set -euo pipefail
+          # The README §"Not rewritten — manual fork chores" subsection
+          # documents specific rg commands a fork-author can run to
+          # find HF-specific literals that survive apply-config. If
+          # any of those patterns stops matching on the upstream tree
+          # (because the file was renamed, the literal was changed,
+          # or the row went stale), this gate fires so the doc is
+          # updated alongside the change.
+          fail=0
+          while IFS='|' read -r label cmd; do
+            [ -z "$label" ] && continue
+            if ! eval "$cmd"; then
+              echo "::error::README 'Not rewritten — manual fork chores' row '$label' is stale: \`$cmd\` returned 0 hits." >&2
+              echo "::error::Either restore the literal, or remove the row from the table in README.md and update this workflow's pattern list." >&2
+              fail=1
+            fi
+          done <<'PATTERNS'
+          LICENSE Hochfrequenz copyright|rg --quiet Hochfrequenz LICENSE
+          CODEOWNERS Hochfrequenz team|rg --quiet Hochfrequenz .github/CODEOWNERS
+          PATTERNS
+          if [ "$fail" -ne 0 ]; then
+            exit 1
+          fi
+
       - name: Hard-coded ./cmd/server must only appear in the known set
         run: |
           set -euo pipefail
