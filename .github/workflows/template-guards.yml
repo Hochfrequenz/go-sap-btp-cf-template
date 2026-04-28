@@ -201,6 +201,30 @@ jobs:
             exit 1
           fi
 
+      - name: xs-security.json redirect-uris must stay empty in the repo
+        run: |
+          set -euo pipefail
+          # README §"5a Update XSUAA redirect URIs" tells the deployer to
+          # edit redirect-uris locally, run `cf update-service go-xsuaa
+          # -c xs-security.json`, and then `git restore xs-security.json`
+          # so the deploy-specific URL never lands in a commit.
+          # `redirect-uris` lives inside the XSUAA service-instance, not
+          # in the repo's snapshot of xs-security.json — by convention
+          # the file in the repo stays `[]`, one edit per deploy, never
+          # committed.
+          #
+          # This gate catches the "forgot to restore" mistake. Without
+          # it, a single tainted commit would silently propagate a
+          # deploy-specific URL into every downstream fork's starting
+          # state.
+          count=$(jq '."oauth2-configuration"."redirect-uris" | length' xs-security.json)
+          if [ "$count" -ne 0 ]; then
+            echo "::error::xs-security.json has $count redirect-uris committed; expected []." >&2
+            echo "::error::Fix: git restore xs-security.json (then re-run cf update-service if needed)." >&2
+            echo "::error::See README §'5a Update XSUAA redirect URIs' for the full edit-then-restore lifecycle." >&2
+            exit 1
+          fi
+
       - name: Hard-coded ./cmd/server must only appear in the known set
         run: |
           set -euo pipefail
