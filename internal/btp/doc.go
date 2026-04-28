@@ -75,7 +75,8 @@
 //   - [OnPremFailureKind] — typed classifier; stable wire format
 //   - [OnPremFailureDestinationNotFound], [OnPremFailureResponseTooLarge],
 //     [OnPremFailureTimeout], [OnPremFailureCanceled], [OnPremFailureTransport]
-//   - [ClassifyOnPremError] — (kind, detail) for huma 502 envelopes
+//   - [ClassifyOnPremError] — (kind, detail) for huma 502 envelopes (err path)
+//   - [OnPremNon2xxDetail] — stable detail string for the non-2xx-from-SAP path
 //
 // # Template-internal (do NOT depend on from outside this package)
 //

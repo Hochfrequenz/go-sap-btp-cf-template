@@ -140,7 +140,7 @@ func Handler(svc btp.OnPremMutator) gin.HandlerFunc {
 
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			btp.AbortError(c, http.StatusBadGateway, btp.CodeUpstreamUnreachable,
-				"on-premise call returned non-2xx", nil)
+				btp.OnPremNon2xxDetail(resp.StatusCode), nil)
 			return
 		}
 
