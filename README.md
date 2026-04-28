@@ -2,7 +2,7 @@
 
 A starter template for Go webservices on SAP BTP Cloud Foundry, aimed at a middle ground SAP-side and Go-side examples we found tend to skip individually. The Go examples on the public web we surveyed tend to skip the SAP-side ceremony (XSUAA token quirks, Cloud Connector's three-leg dance, CSRF on writes); the SAP examples we surveyed tend to skip the Go-side engineering (typed errors, testable handlers, CI gates, two-levels logging). This tries to cover both.
 
-Once the BTP prerequisites are in place (see [Deployment](#deployment) — XSUAA / Destination / Connectivity service instances, Cloud Connector paired and exposing a virtual host, a destination pointing at it): fork, `go run ./cmd/apply-config` to rewrite module path + app name + CF coordinates from a single `config.yml`, build `./bin/server`, `cf push`.
+Once the BTP prerequisites are in place (see [Deployment](#deployment) — XSUAA / Destination / Connectivity service instances, Cloud Connector paired and exposing a virtual host, a destination pointing at it): fork, `go run ./cmd/apply-config` to rewrite module path + app name + CF coordinates + the demo handlers' destination name from a single `config.yml`, build `./bin/server`, `cf push`.
 
 **What it is, concretely:**
 
@@ -267,9 +267,16 @@ btp.AbortError(c, http.StatusBadGateway, btp.CodeUpstreamUnreachable,
 
 The split: the **user-facing message** is what the client sees — keep it stable and generic, clients switch on `code`, not on `message`. The **underlying `err`** goes to `slog.ErrorContext` server-side with the status, code, and request ID so an operator can grep by request ID and see the real cause.
 
+> **Two helpers turn the user-facing message into something diagnostic without leaking err details.** Use them instead of a hand-written constant string when calling `svc.CallOnPremise` / `svc.CallOnPremiseMutating`:
+>
+> - **err path** — `kind, detail := btp.ClassifyOnPremError(err)` returns a typed `OnPremFailureKind` (`destination_not_found`, `response_too_large`, `timeout`, `canceled`, `transport_error`) plus a stable, client-safe detail string. Pass `detail` as the user message; log `kind` server-side so operators can filter / aggregate. See `examples/adtdiscovery/handler.go` for the canonical pattern.
+> - **non-2xx-from-SAP path** — `btp.OnPremNon2xxDetail(resp.StatusCode)` returns `"on-premise system returned HTTP <status>"`. Surfaces the SAP status to the client without leaking the response body. Used by both `examples/adtdiscovery/handler.go` (huma) and `examples/adtcheckrun/handler.go` (gin/`AbortError`).
+>
+> The wire format of both helpers is part of the public API surface (see `internal/btp/doc.go`); changes require a CHANGELOG entry. Forks pinning the old constant strings in alert rules need to update.
+
 One exception where it's safe (and useful) to pass `err.Error()` as the user message: `go-playground/validator` errors from `c.ShouldBindJSON`. Those messages describe struct-tag violations that the client caused and needs to fix — surfacing them is the whole point.
 
-Canonical codes live in [`internal/btp/httperr.go`](internal/btp/httperr.go) (`CodeInvalidRequest`, `CodeUnauthorized`, `CodeForbidden`, `CodeNotFound`, `CodeUpstreamUnreachable`, `CodeInternal`); declare your own `ErrorCode` constants if you need more.
+Canonical codes live in [`internal/btp/httperr.go`](internal/btp/httperr.go) (`CodeInvalidRequest`, `CodeUnauthorized`, `CodeForbidden`, `CodeNotFound`, `CodeUpstreamUnreachable`, `CodeInternal`); declare your own `ErrorCode` constants if you need more. Failure-classification helpers live in [`internal/btp/classifier.go`](internal/btp/classifier.go) and [`internal/btp/non2xx_detail.go`](internal/btp/non2xx_detail.go).
 
 ---
 
