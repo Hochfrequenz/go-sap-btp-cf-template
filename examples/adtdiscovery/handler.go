@@ -115,7 +115,8 @@ func Handler(svc btp.OnPremCaller) func(context.Context, *DiscoveryInput) (*Disc
 
 	return func(ctx context.Context, _ *DiscoveryInput) (*DiscoveryOutput, error) {
 		resp, err := svc.CallOnPremise(ctx,
-			destinationName, http.MethodGet, sapPath, nil, nil)
+			destinationName, http.MethodGet, sapPath,
+			http.Header{"Accept": []string{"application/atomsvc+xml"}}, nil)
 		if err != nil {
 			// huma's default NewError attaches `errs[].Error()` to the
 			// response body — which would leak the underlying Go error
