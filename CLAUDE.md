@@ -10,7 +10,7 @@ Many fork-authors here are SAP-fluent (ABAP / cockpit / Cloud Connector) but not
 
 ## When asked to add an HTTP handler
 
-1. **Pick the style.** huma (typed, OpenAPI-generated) vs gin (direct claim access, `btp.AbortError`). Decision table at README §"Adding your service" (around the "Validate and sanitise at the Gin layer" subsection — see issue #78 if not yet landed).
+1. **Pick the style.** huma (typed, OpenAPI-generated) vs gin (direct claim access, `btp.AbortError`). Decision table at README §"OpenAPI 3.1 + Swagger UI via huma" (right after the huma example): GET + want OpenAPI → huma; POST/PUT/DELETE/PATCH + need `user_name` for audit → gin; everything else → gin (default). Never mix the two styles in one handler.
 2. **Place files.** New handlers live at `examples/<your-name>/handler.go` + `handler_test.go`. Tests sit next to the handler.
 3. **Register the route** from `buildRouter` in `cmd/server/main.go:187`. New routes hang off the JWT-guarded `api` group.
 4. **Depend on interfaces, not Service.** Handler signatures take `btp.OnPremCaller` (reads) or `btp.OnPremMutator` (CSRF writes). Never `*btp.Service`. The full library-intent surface lives at `internal/btp/doc.go`.

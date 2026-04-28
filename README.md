@@ -397,7 +397,14 @@ func Handler(svc btp.OnPremCaller) func(context.Context, *DiscoveryInput) (*Disc
 
 The OpenAPI operation, request/response schemas, and validation rules are derived from the function signature and the embedded structs' JSON tags. Add a field with `validate:"required,oneof=EUR USD GBP"` and the spec carries that constraint automatically.
 
-> **Two handler styles ship in this repo today.** `adtdiscovery` is huma-style (above). `adtcheckrun` and `invoicesync` stay gin-style (`func(c *gin.Context)`) for now — they read `jwtClaims` from the gin context map for their audit log, and surfacing that to a `context.Context`-only huma handler needs a small adapter that's tracked as follow-up. Pick whichever style fits a new handler: huma when the OpenAPI spec coverage is worth more than direct `c.Get("jwtClaims")` access, gin when claim-reading is on the hot path. Both can coexist on the same router group.
+**Two handler styles ship in this repo today.** `adtdiscovery` is huma-style (above). `adtcheckrun` and `invoicesync` stay gin-style (`func(c *gin.Context)`) — they read `jwtClaims` from the gin context map for their audit log, and surfacing that to a `context.Context`-only huma handler needs a small adapter tracked as follow-up. Both can coexist on the same router group; pick one per handler — never mix the two styles in a single endpoint.
+
+| Need | Pick | Why |
+| --- | --- | --- |
+| Read-only (GET) and you want OpenAPI 3.1 / Swagger UI coverage | **huma** | The route auto-appears in `/openapi.json`; no manual spec wiring. |
+| Mutating (POST / PUT / DELETE / PATCH) and you need `user_name` (or any other claim) from the JWT for audit logging | **gin** | `c.MustGet("jwtClaims")` is on the hot path; `btp.AbortError` carries the typed envelope. |
+| Mutating without claim access | **gin** (default) | Same envelope shape as the rest of the typed-error story; consistent with the two existing mutating examples. |
+| Tied — could go either way | **gin** | Matches more existing examples (2 of 3); easier for fork-authors to consistency-check against the canonical patterns. |
 
 > **Error envelope.** Huma renders errors as RFC 7807 problem-details (`{"title":"Bad Gateway","status":502,"detail":"…"}`); the gin-style handlers use `btp.ErrorEnvelope` (`{"error":{"code":"upstream_unreachable","message":"…","request_id":"…"}}`). Aware mismatch: unifying both onto `btp.ErrorEnvelope` requires overriding `huma.NewError` AND propagating `request_id` into `context.Context`, which is the same adapter as the `jwtClaims` follow-up. Until then, clients calling `/api/adt-discovery` see RFC 7807; clients calling `/api/adt-checkrun` see the typed envelope.
 
