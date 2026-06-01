@@ -940,6 +940,4 @@ XSUAA client-credentials tokens are cached with a 30 s refresh leeway and collap
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Matches the existing public Hochfrequenz precedent (`adtler` is also MIT). The template's contents are MIT; new code a fork adds on top can be under any licence the fork chooses (your additions, your call).
-
-XML types in `examples/adtcheckrun/handler.go` and `examples/adtdiscovery/handler.go` are adapted from [`Hochfrequenz/adtler`](https://github.com/Hochfrequenz/adtler) (MIT) — attribution is in the source files, not relicensing.
+MIT, see [LICENSE](LICENSE).
