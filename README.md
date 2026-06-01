@@ -763,14 +763,29 @@ Why `/sap/bc/adt/discovery` as the probe: it's a standard ABAP Development Tools
 
 | Secret | What it is |
 | --- | --- |
-| `CF_USER` | Email of a CF user with the `SpaceDeveloper` role on the deploy target space. See the caveat below — this usually needs to be a **technical user** created by a Subaccount Administrator, because SSO-only users cannot authenticate non-interactively. |
-| `CF_PASSWORD` | That user's password. |
+| `CF_USER` | Email address of a SAP ID Service account with the `SpaceDeveloper` role on the deploy target space. |
+| `CF_PASSWORD` | That account's SAP ID Service password. |
 
-Set both at **Settings → Secrets and variables → Actions → New repository secret**. If either is missing, the deploy job fails loudly at `cf auth` instead of silently pushing with empty credentials.
+Set both at **Settings → Secrets and variables → Actions → New repository secret**.
+If either is missing, the deploy job fails loudly at `cf auth` instead of silently pushing with empty credentials.
 
-### Caveat on CF identity
+### Which CF identity to use
 
-BTP subaccounts commonly enforce SAP ID Service SSO for human users, which means those users have **no usable password** for `cf login -u/-p`. The workflow needs a non-interactive credential pair, which usually means creating a dedicated CF user ("technical user") via **BTP cockpit → Security → Users → New** with a local password, then granting `SpaceDeveloper` on the target space via `cf set-space-role`. Creating the user requires Subaccount Administrator rights.
+`cf auth` authenticates non-interactively with a username and password.
+This works only for accounts that have a **local password in the SAP ID Service** — it does not work for accounts that authenticate exclusively via corporate SSO (SAML federation), because those accounts have no usable password outside of a browser redirect.
+
+**SAP P-users (accounts.sap.com) work** and are the simplest starting point: a P-user lives in the SAP ID Service by default, authenticates non-interactively, and requires no admin involvement to set up.
+Use your own P-user to prove the pipeline end-to-end, then replace it with a dedicated technical user once the pipeline is stable.
+
+**Dedicated technical user (recommended for anything beyond a personal fork):**
+Create a new SAP ID Service account at [accounts.sap.com](https://accounts.sap.com) with a CI-specific email (e.g. `ci-deploy@your-org.com`).
+A Subaccount Administrator then creates the corresponding shadow user in BTP cockpit (Security → Users → Create, Identity Provider: SAP ID Service) and grants the `SpaceDeveloper` role via Cloud Foundry → Spaces → your-space → Space Members → Add Members, or:
+
+```sh
+cf set-space-role ci-deploy@your-org.com "<your-cf-org>" "<your-cf-space>" SpaceDeveloper
+```
+
+A dedicated account is revocable without affecting a real person, has a password that does not expire alongside any corporate identity lifecycle, and produces an audit trail that attributes deploys to a service identity rather than an individual.
 
 The alternative — `cf login --sso` with a temporary passcode — is interactive-only and not suitable for CI.
 

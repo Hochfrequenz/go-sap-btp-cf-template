@@ -213,6 +213,7 @@ func buildRouter(validator *btp.JWTValidator, caller btp.OnPremCaller, mutator b
 	r.GET("/healthz", func(c *gin.Context) {
 		c.String(http.StatusOK, "ok")
 	})
+	r.GET("/version", versionHandler())
 
 	api := r.Group("/api")
 	api.Use(validator.Middleware())

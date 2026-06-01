@@ -52,11 +52,16 @@ jobs:
     name: deploy to CF
     needs: gate
     runs-on: ubuntu-latest
-    # CF_USER / CF_PASSWORD must exist as repository secrets. See README
-    # §"Continuous deployment" for how to set them up and which CF user
-    # identity is expected. If they are missing, `cf auth` below fails
-    # with a clear error; the workflow does not accidentally push with
-    # an empty credential pair.
+    # CF_USER / CF_PASSWORD must exist as repository secrets.
+    # CF_USER is the email address of a SAP ID Service account; CF_PASSWORD
+    # is that account's SAP ID password. A personal P-user (accounts.sap.com)
+    # works and is the simplest starting point — it authenticates
+    # non-interactively because it lives in the SAP ID Service, not behind
+    # corporate SSO. For production use a dedicated technical user instead
+    # (one account per pipeline, revocable without affecting a real person).
+    # See README §"Continuous deployment" for the full setup guide.
+    # If either secret is missing, `cf auth` fails loudly here instead of
+    # silently pushing with empty credentials.
     steps:
       - uses: actions/checkout@v6
 
@@ -67,12 +72,21 @@ jobs:
       - name: Cross-compile static Linux/amd64 binary
         # CGO_ENABLED=0 avoids a C toolchain dependency on the runner
         # and produces a fully-static binary the binary_buildpack
-        # launches with no glibc version coupling. Same one-liner that
+        # launches with no glibc version coupling. Same command that
         # `make build-linux` runs locally — keep them in sync.
         run: |
           mkdir -p bin
+          PKG_PATH="$(head -1 go.mod | awk '{print $2}')/cmd/server"
+          VERSION=$(git describe --tags --always 2>/dev/null || echo dev)
+          COMMIT=$(git rev-parse --short HEAD)
+          BRANCH=$(git rev-parse --abbrev-ref HEAD)
+          BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          LDFLAGS="-X '${PKG_PATH}.version=${VERSION}' \
+                   -X '${PKG_PATH}.commit=${COMMIT}' \
+                   -X '${PKG_PATH}.branch=${BRANCH}' \
+                   -X '${PKG_PATH}.buildDate=${BUILD_DATE}'"
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-            go build -o bin/server ./cmd/server
+            go build -ldflags "${LDFLAGS}" -o bin/server ./cmd/server
           file bin/server
           ls -lh bin/server
 
@@ -113,15 +127,20 @@ jobs:
         run: |
           cf push "${BACKEND_HOST}-web" -f manifest.yml --vars-file vars.yml
 
-      - name: Smoke test — /healthz
+      - name: Smoke test — /healthz + /version
         run: |
-          url="https://${BACKEND_HOST}-web.${DOMAIN}/healthz"
-          echo "GET $url (expect 200 ok)"
+          base="https://${BACKEND_HOST}-web.${DOMAIN}"
+          echo "GET $base/healthz (expect 200 ok)"
           # -f fails on HTTP >=400; retry a few times to ride out the
           # post-deploy warm-up window.
-          curl -fsS --retry 5 --retry-all-errors --retry-delay 3 "$url"
+          curl -fsS --retry 5 --retry-all-errors --retry-delay 3 "$base/healthz"
           echo
-          echo "::notice::Deploy green — /healthz returned 200 ok"
+          echo "GET $base/version (expect commit != unknown)"
+          version_body=$(curl -fsS --retry 3 --retry-all-errors --retry-delay 3 "$base/version")
+          echo "$version_body"
+          echo "$version_body" | grep -q '"commit"' || { echo "::error::/version missing commit field"; exit 1; }
+          echo "$version_body" | grep -vq '"commit":"unknown"' || { echo "::error::ldflags not injected — commit is still 'unknown'"; exit 1; }
+          echo "::notice::Deploy green — /healthz and /version both passed"
 
       - name: cf logout (always)
         if: always()
