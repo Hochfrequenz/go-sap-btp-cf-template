@@ -49,7 +49,7 @@ jobs:
         run: golangci-lint fmt --diff --enable gofmt
 
   deploy:
-    name: deploy to ${{ env.CF_ORG }} / ${{ env.CF_SPACE }}
+    name: deploy to CF
     needs: gate
     runs-on: ubuntu-latest
     # CF_USER / CF_PASSWORD must exist as repository secrets. See README
