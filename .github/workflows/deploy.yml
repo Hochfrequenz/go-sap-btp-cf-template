@@ -76,17 +76,15 @@ jobs:
         # `make build-linux` runs locally — keep them in sync.
         run: |
           mkdir -p bin
-          PKG_PATH="$(head -1 go.mod | awk '{print $2}')/cmd/server"
+          MODULE=$(head -1 go.mod | awk '{print $2}')
           VERSION=$(git describe --tags --always 2>/dev/null || echo dev)
-          COMMIT=$(git rev-parse --short HEAD)
-          BRANCH=$(git rev-parse --abbrev-ref HEAD)
+          COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
+          BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)
           BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          LDFLAGS="-X '${PKG_PATH}.version=${VERSION}' \
-                   -X '${PKG_PATH}.commit=${COMMIT}' \
-                   -X '${PKG_PATH}.branch=${BRANCH}' \
-                   -X '${PKG_PATH}.buildDate=${BUILD_DATE}'"
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-            go build -ldflags "${LDFLAGS}" -o bin/server ./cmd/server
+          echo "module=${MODULE} version=${VERSION} commit=${COMMIT} branch=${BRANCH} date=${BUILD_DATE}"
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+            -ldflags "-X ${MODULE}/cmd/server.version=${VERSION} -X ${MODULE}/cmd/server.commit=${COMMIT} -X ${MODULE}/cmd/server.branch=${BRANCH} -X ${MODULE}/cmd/server.buildDate=${BUILD_DATE}" \
+            -o bin/server ./cmd/server
           file bin/server
           ls -lh bin/server
 
