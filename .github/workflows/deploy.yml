@@ -83,7 +83,7 @@ jobs:
           BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           echo "module=${MODULE} version=${VERSION} commit=${COMMIT} branch=${BRANCH} date=${BUILD_DATE}"
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-            -ldflags "-X ${MODULE}/cmd/server.version=${VERSION} -X ${MODULE}/cmd/server.commit=${COMMIT} -X ${MODULE}/cmd/server.branch=${BRANCH} -X ${MODULE}/cmd/server.buildDate=${BUILD_DATE}" \
+            -ldflags "-X main.version=${VERSION} -X main.commit=${COMMIT} -X main.branch=${BRANCH} -X main.buildDate=${BUILD_DATE}" \
             -o bin/server ./cmd/server
           file bin/server
           ls -lh bin/server

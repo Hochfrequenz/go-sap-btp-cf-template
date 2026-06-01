@@ -10,10 +10,10 @@ COMMIT    := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 BRANCH    := $(shell git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)
 BUILDDATE := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
-LDFLAGS := -X '$(PKG_PATH).version=$(VERSION)' \
-           -X '$(PKG_PATH).commit=$(COMMIT)' \
-           -X '$(PKG_PATH).branch=$(BRANCH)' \
-           -X '$(PKG_PATH).buildDate=$(BUILDDATE)'
+LDFLAGS := -X main.version=$(VERSION) \
+           -X main.commit=$(COMMIT) \
+           -X main.branch=$(BRANCH) \
+           -X main.buildDate=$(BUILDDATE)
 
 .PHONY: build-linux test vet lint clean
 
