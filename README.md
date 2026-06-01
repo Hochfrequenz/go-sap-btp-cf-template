@@ -1,30 +1,46 @@
 # go-sap-btp-cf-template
 
-A starter template for Go webservices on SAP BTP Cloud Foundry, aimed at a middle ground SAP-side and Go-side examples we found tend to skip individually. The Go examples on the public web we surveyed tend to skip the SAP-side ceremony (XSUAA token quirks, Cloud Connector's three-leg dance, CSRF on writes); the SAP examples we surveyed tend to skip the Go-side engineering (typed errors, testable handlers, CI gates, two-levels logging). This tries to cover both.
+Go starter template for building webservices on **SAP BTP Cloud Foundry** that talk to on-premise SAP systems. Fork it, fill in one `config.yml`, `cf push` — you get a production-grade Go backend with **XSUAA authentication**, **Destination + Connectivity + Cloud Connector** wiring, and a **transparent CSRF handshake** on writes, all behind a single `svc.CallOnPremise(…)` call in your handler code.
 
-Once the BTP prerequisites are in place (see [Deployment](#deployment) — XSUAA / Destination / Connectivity service instances, Cloud Connector paired and exposing a virtual host, a destination pointing at it): fork, `go run ./cmd/apply-config` to rewrite module path + app name + CF coordinates + the demo handlers' destination name from a single `config.yml`, build `./bin/server`, `cf push`.
+### What's in the box
 
-**What it is, concretely:**
+| Layer | What you get |
+| --- | --- |
+| **Runtime** | [Gin](https://github.com/gin-gonic/gin) HTTP server with graceful shutdown and structured (`slog`) logging |
+| **Authentication** | XSUAA JWT validation (RS256 signature, audience, expiry) via JWKS — see [`internal/btp/auth.go`](internal/btp/auth.go) |
+| **SAP connectivity** | Three-leg dance (XSUAA → Destination service → Connectivity proxy → Cloud Connector) with pluggable `DestinationAuthenticator` (ships `NoAuthentication` + `BasicAuthentication`; Principal Propagation plugs in) |
+| **CSRF on writes** | Automatic fetch → attach → retry; one `svc.CallOnPremiseMutating(…)` call |
+| **Typed handlers** | Two demo endpoints (`GET /api/adt-discovery`, `POST /api/adt-checkrun`) with request validation, typed responses, and one-method-fake tests |
+| **Error envelope** | `btp.AbortError` + stable JSON error shape with request IDs |
+| **CI / CD** | GitHub Actions pipeline: lint, test, template-guards, `cf push` to Cloud Foundry |
+| **Fork tooling** | `go run ./cmd/apply-config` rewrites module path, app name, CF coordinates, and destination names from `config.yml` — one command, whole tree |
 
-- runs on **SAP BTP Cloud Foundry** (two apps: Go backend + SAP approuter),
-- authenticates users via **XSUAA** (JWKS-pinned JWT validation: RS256 signature, audience, expiry — see `internal/btp/auth.go` for why issuer is intentionally not checked),
-- calls an **on-premise SAP system** through the **Connectivity + Destination** services (the Cloud Connector three-leg dance), with a **transparent CSRF handshake** on writes — one call on your side, full fetch → attach → retry on ours (the mutating call buffers its request body up-front so the retry can replay it),
-- is built on **Gin** with a `DestinationAuthenticator` registry designed so **Principal Propagation** / SSO / OAuth2 client-credentials can be added as plug-in authenticators without touching the three-leg dance itself. The template ships `NoAuthentication` and `BasicAuthentication`; Principal Propagation specifically plugs in cleanly because the inbound JWT is already stashed under `btp.ForwardedUserTokenKey{}`. Swapping the user-auth layer to Auth0 is a different exercise — it replaces the JWT validator wiring in `cmd/server/main.go`, not a destination authenticator.
+### Architecture at a glance
 
-**The template ships two typed demo endpoints, not a transparent proxy.** Strict typing at the Gin boundary is only consistent with a finite, fixed-path endpoint set — a `/api/sap/:destination/*path` passthrough is by definition untyped (any body, any response). The two shipped routes show the constrained-proxy pattern instead:
+```mermaid
+flowchart LR
+    Browser([Browser]) --> AR[SAP Approuter<br/><small>JWT login</small>]
+    AR -->|/api/*| Go[Go backend · Gin<br/><small>JWT validation · typed handlers</small>]
+    Go -->|svc.CallOnPremise| DST[Destination Service]
+    DST --> CC[Cloud Connector]
+    CC -->|HTTPS + Basic Auth| SAP[On-premise SAP<br/><small>RFC / OData / ADT</small>]
 
-- `GET /api/adt-discovery` — reads SAP's ADT service document, parses the ATOM XML, emits a typed JSON view.
-- `POST /api/adt-checkrun` — takes a typed JSON request, builds the SAP-side XML internally, runs an ATC syntax check through the CSRF handshake, parses SAP's XML reply, emits typed JSON.
+    subgraph SAP BTP Cloud Foundry
+        AR
+        Go
+        DST
+    end
 
-Both have the destination name and SAP path hard-coded at route registration, validator tags on the request struct, and handler tests that use a one-method fake. The `svc.ProxyHandler` method on `*btp.Service` is still available for forks that explicitly want to wire a transparent proxy — but they're expected to gate it behind `btp.RequireScope("...User")` and accept that typed validation ends at that route. The template's deployed showcase does not expose it.
-
-What the template abstracts for you: XSUAA client-creds for both the Destination service and the Connectivity service, destination lookup, the proxied on-prem call through the Cloud Connector, Basic auth on the SAP side, CSRF fetch/attach/retry for writes. What it does NOT abstract: destination-service caching, destination-secret rotation, Cloud Connector failover, XSUAA zone/tenant switching — follow-ups for when they become the bottleneck.
+    style Go fill:#d1e7dd,stroke:#0f5132,stroke-width:2px,color:#0f5132
+    style SAP fill:#fff3cd,stroke:#664d03,stroke-width:2px,color:#664d03
+    style CC fill:#e9ecef,stroke:#6c757d,stroke-dasharray:5 5,color:#495057
+```
 
 > **Signpost.** First time here?
-> - Building a new endpoint on top of an existing fork → [Adding your service](#adding-your-service--the-80--case).
-> - Just forked this repo and need to configure it → [Using this repo as a template](#using-this-repo-as-a-template).
-> - Deploying for the first time → [Deployment](#deployment).
-> - Wondering what the three-leg dance actually looks like on the wire → [How it works under the hood](#how-it-works-under-the-hood).
+> - Just forked and need to configure → [Using this repo as a template](#using-this-repo-as-a-template)
+> - Building a new endpoint on an existing fork → [Adding your service](#adding-your-service--the-80--case)
+> - Deploying for the first time → [Deployment](#deployment)
+> - Curious how the three-leg dance works on the wire → [How it works under the hood](#how-it-works-under-the-hood)
 
 ## Table of contents
 
