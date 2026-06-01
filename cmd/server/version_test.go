@@ -12,7 +12,7 @@ import (
 )
 
 func Test_versionHandler_ReturnsAllFields(t *testing.T) {
-	t.Cleanup(func() { version = "dev"; commit = "unknown"; branch = "unknown"; buildDate = "unknown" })
+	t.Cleanup(func() { version = defaultVersion; commit = defaultCommit; branch = defaultBranch; buildDate = defaultBuildDate })
 	version = "v1.2.3"
 	commit = "abc1234"
 	branch = "main"
@@ -51,8 +51,8 @@ func Test_versionHandler_DefaultsWithoutLdflags(t *testing.T) {
 
 	var body map[string]string
 	then.AssertThat(t, json.Unmarshal(w.Body.Bytes(), &body), is.Nil())
-	then.AssertThat(t, body["version"], is.EqualTo("dev"))
-	then.AssertThat(t, body["commit"], is.EqualTo("unknown"))
-	then.AssertThat(t, body["branch"], is.EqualTo("unknown"))
-	then.AssertThat(t, body["build_date"], is.EqualTo("unknown"))
+	then.AssertThat(t, body["version"], is.EqualTo(defaultVersion))
+	then.AssertThat(t, body["commit"], is.EqualTo(defaultCommit))
+	then.AssertThat(t, body["branch"], is.EqualTo(defaultBranch))
+	then.AssertThat(t, body["build_date"], is.EqualTo(defaultBuildDate))
 }

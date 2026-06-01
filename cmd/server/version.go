@@ -8,11 +8,18 @@ import (
 
 // Build-time variables injected via -ldflags. Defaults are safe fallbacks
 // for local `go run` and test builds that don't pass ldflags.
+const (
+	defaultVersion   = "dev"
+	defaultCommit    = "unknown"
+	defaultBranch    = "unknown"
+	defaultBuildDate = "unknown"
+)
+
 var (
-	version   = "dev"
-	commit    = "unknown"
-	branch    = "unknown"
-	buildDate = "unknown"
+	version   = defaultVersion
+	commit    = defaultCommit
+	branch    = defaultBranch
+	buildDate = defaultBuildDate
 )
 
 func versionHandler() gin.HandlerFunc {
