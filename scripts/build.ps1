@@ -14,11 +14,29 @@ $ErrorActionPreference = "Stop"
 
 New-Item -ItemType Directory -Force -Path "bin" | Out-Null
 
+$pkgPath = "github.com/hochfrequenz/go-sap-btp-cf-template/cmd/server"
+
+$version = & git describe --tags --always 2>$null
+if ($LASTEXITCODE -ne 0 -or -not $version) { $version = "dev" }
+
+$commit = & git rev-parse --short HEAD 2>$null
+if ($LASTEXITCODE -ne 0 -or -not $commit) { $commit = "unknown" }
+
+$branch = & git rev-parse --abbrev-ref HEAD 2>$null
+if ($LASTEXITCODE -ne 0 -or -not $branch) { $branch = "unknown" }
+
+$buildDate = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+
+$ldflags = "-X '${pkgPath}.version=${version}' " +
+           "-X '${pkgPath}.commit=${commit}' " +
+           "-X '${pkgPath}.branch=${branch}' " +
+           "-X '${pkgPath}.buildDate=${buildDate}'"
+
 $env:CGO_ENABLED = "0"
 $env:GOOS        = "linux"
 $env:GOARCH      = "amd64"
 
-& go build -o "bin/server" "./cmd/server"
+& go build -ldflags $ldflags -o "bin/server" "./cmd/server"
 if ($LASTEXITCODE -ne 0) {
     Write-Error "go build failed with exit code $LASTEXITCODE"
     exit $LASTEXITCODE

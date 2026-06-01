@@ -52,11 +52,16 @@ jobs:
     name: deploy to CF
     needs: gate
     runs-on: ubuntu-latest
-    # CF_USER / CF_PASSWORD must exist as repository secrets. See README
-    # §"Continuous deployment" for how to set them up and which CF user
-    # identity is expected. If they are missing, `cf auth` below fails
-    # with a clear error; the workflow does not accidentally push with
-    # an empty credential pair.
+    # CF_USER / CF_PASSWORD must exist as repository secrets.
+    # CF_USER is the email address of a SAP ID Service account; CF_PASSWORD
+    # is that account's SAP ID password. A personal P-user (accounts.sap.com)
+    # works and is the simplest starting point — it authenticates
+    # non-interactively because it lives in the SAP ID Service, not behind
+    # corporate SSO. For production use a dedicated technical user instead
+    # (one account per pipeline, revocable without affecting a real person).
+    # See README §"Continuous deployment" for the full setup guide.
+    # If either secret is missing, `cf auth` fails loudly here instead of
+    # silently pushing with empty credentials.
     steps:
       - uses: actions/checkout@v6
 
@@ -71,8 +76,17 @@ jobs:
         # `make build-linux` runs locally — keep them in sync.
         run: |
           mkdir -p bin
+          PKG_PATH="github.com/hochfrequenz/go-sap-btp-cf-template/cmd/server"
+          VERSION=$(git describe --tags --always 2>/dev/null || echo dev)
+          COMMIT=$(git rev-parse --short HEAD)
+          BRANCH=$(git rev-parse --abbrev-ref HEAD)
+          BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          LDFLAGS="-X '${PKG_PATH}.version=${VERSION}' \
+                   -X '${PKG_PATH}.commit=${COMMIT}' \
+                   -X '${PKG_PATH}.branch=${BRANCH}' \
+                   -X '${PKG_PATH}.buildDate=${BUILD_DATE}'"
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-            go build -o bin/server ./cmd/server
+            go build -ldflags "${LDFLAGS}" -o bin/server ./cmd/server
           file bin/server
           ls -lh bin/server
 
