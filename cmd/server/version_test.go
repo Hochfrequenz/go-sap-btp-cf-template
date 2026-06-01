@@ -12,6 +12,7 @@ import (
 )
 
 func Test_versionHandler_ReturnsAllFields(t *testing.T) {
+	t.Cleanup(func() { version = "dev"; commit = "unknown"; branch = "unknown"; buildDate = "unknown" })
 	version = "v1.2.3"
 	commit = "abc1234"
 	branch = "main"
@@ -33,4 +34,25 @@ func Test_versionHandler_ReturnsAllFields(t *testing.T) {
 	then.AssertThat(t, body["commit"], is.EqualTo("abc1234"))
 	then.AssertThat(t, body["branch"], is.EqualTo("main"))
 	then.AssertThat(t, body["build_date"], is.EqualTo("2026-06-01T00:00:00Z"))
+}
+
+func Test_versionHandler_DefaultsWithoutLdflags(t *testing.T) {
+	// Pins the fallback strings that a plain `go build` (no -ldflags) produces.
+	// Any change to the defaults in version.go trips this test.
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.GET("/version", versionHandler())
+
+	req := httptest.NewRequest(http.MethodGet, "/version", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	then.AssertThat(t, w.Code, is.EqualTo(http.StatusOK))
+
+	var body map[string]string
+	then.AssertThat(t, json.Unmarshal(w.Body.Bytes(), &body), is.Nil())
+	then.AssertThat(t, body["version"], is.EqualTo("dev"))
+	then.AssertThat(t, body["commit"], is.EqualTo("unknown"))
+	then.AssertThat(t, body["branch"], is.EqualTo("unknown"))
+	then.AssertThat(t, body["build_date"], is.EqualTo("unknown"))
 }

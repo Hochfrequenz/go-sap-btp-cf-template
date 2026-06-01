@@ -14,7 +14,7 @@ $ErrorActionPreference = "Stop"
 
 New-Item -ItemType Directory -Force -Path "bin" | Out-Null
 
-$pkgPath = "github.com/hochfrequenz/go-sap-btp-cf-template/cmd/server"
+$pkgPath = ((Get-Content go.mod -First 1) -replace '^module\s+', '') + "/cmd/server"
 
 $version = & git describe --tags --always 2>$null
 if ($LASTEXITCODE -ne 0 -or -not $version) { $version = "dev" }

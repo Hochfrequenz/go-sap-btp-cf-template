@@ -766,7 +766,8 @@ Why `/sap/bc/adt/discovery` as the probe: it's a standard ABAP Development Tools
 | `CF_USER` | Email address of a SAP ID Service account with the `SpaceDeveloper` role on the deploy target space. |
 | `CF_PASSWORD` | That account's SAP ID Service password. |
 
-Set both at **Settings → Secrets and variables → Actions → New repository secret**. If either is missing, the deploy job fails loudly at `cf auth` instead of silently pushing with empty credentials.
+Set both at **Settings → Secrets and variables → Actions → New repository secret**.
+If either is missing, the deploy job fails loudly at `cf auth` instead of silently pushing with empty credentials.
 
 ### Which CF identity to use
 

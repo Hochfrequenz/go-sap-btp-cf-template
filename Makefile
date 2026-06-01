@@ -3,7 +3,7 @@
 
 BINARY   := bin/server
 PKG      := ./cmd/server
-PKG_PATH := github.com/hochfrequenz/go-sap-btp-cf-template/cmd/server
+PKG_PATH := $(shell head -1 go.mod | awk '{print $$2}')/cmd/server
 
 VERSION   := $(shell git describe --tags --always 2>/dev/null || echo dev)
 COMMIT    := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)

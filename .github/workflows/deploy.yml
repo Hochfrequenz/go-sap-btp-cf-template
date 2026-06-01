@@ -72,11 +72,11 @@ jobs:
       - name: Cross-compile static Linux/amd64 binary
         # CGO_ENABLED=0 avoids a C toolchain dependency on the runner
         # and produces a fully-static binary the binary_buildpack
-        # launches with no glibc version coupling. Same one-liner that
+        # launches with no glibc version coupling. Same command that
         # `make build-linux` runs locally — keep them in sync.
         run: |
           mkdir -p bin
-          PKG_PATH="github.com/hochfrequenz/go-sap-btp-cf-template/cmd/server"
+          PKG_PATH="$(head -1 go.mod | awk '{print $2}')/cmd/server"
           VERSION=$(git describe --tags --always 2>/dev/null || echo dev)
           COMMIT=$(git rev-parse --short HEAD)
           BRANCH=$(git rev-parse --abbrev-ref HEAD)
@@ -127,15 +127,20 @@ jobs:
         run: |
           cf push "${BACKEND_HOST}-web" -f manifest.yml --vars-file vars.yml
 
-      - name: Smoke test — /healthz
+      - name: Smoke test — /healthz + /version
         run: |
-          url="https://${BACKEND_HOST}-web.${DOMAIN}/healthz"
-          echo "GET $url (expect 200 ok)"
+          base="https://${BACKEND_HOST}-web.${DOMAIN}"
+          echo "GET $base/healthz (expect 200 ok)"
           # -f fails on HTTP >=400; retry a few times to ride out the
           # post-deploy warm-up window.
-          curl -fsS --retry 5 --retry-all-errors --retry-delay 3 "$url"
+          curl -fsS --retry 5 --retry-all-errors --retry-delay 3 "$base/healthz"
           echo
-          echo "::notice::Deploy green — /healthz returned 200 ok"
+          echo "GET $base/version (expect commit != unknown)"
+          version_body=$(curl -fsS --retry 3 --retry-all-errors --retry-delay 3 "$base/version")
+          echo "$version_body"
+          echo "$version_body" | grep -q '"commit"' || { echo "::error::/version missing commit field"; exit 1; }
+          echo "$version_body" | grep -vq '"commit":"unknown"' || { echo "::error::ldflags not injected — commit is still 'unknown'"; exit 1; }
+          echo "::notice::Deploy green — /healthz and /version both passed"
 
       - name: cf logout (always)
         if: always()
