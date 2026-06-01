@@ -12,7 +12,12 @@ import (
 )
 
 func Test_versionHandler_ReturnsAllFields(t *testing.T) {
-	t.Cleanup(func() { version = defaultVersion; commit = defaultCommit; branch = defaultBranch; buildDate = defaultBuildDate })
+	t.Cleanup(func() {
+		version = defaultVersion
+		commit = defaultCommit
+		branch = defaultBranch
+		buildDate = defaultBuildDate
+	})
 	version = "v1.2.3"
 	commit = "abc1234"
 	branch = "main"
