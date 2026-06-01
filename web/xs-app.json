@@ -15,6 +15,12 @@
       "target": "/healthz",
       "destination": "GoBackend",
       "authenticationType": "none"
+    },
+    {
+      "source": "^/version$",
+      "target": "/version",
+      "destination": "GoBackend",
+      "authenticationType": "none"
     }
   ]
 }
