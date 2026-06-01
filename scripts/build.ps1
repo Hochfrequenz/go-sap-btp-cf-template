@@ -14,8 +14,6 @@ $ErrorActionPreference = "Stop"
 
 New-Item -ItemType Directory -Force -Path "bin" | Out-Null
 
-$pkgPath = ((Get-Content go.mod -First 1) -replace '^module\s+', '') + "/cmd/server"
-
 $version = & git describe --tags --always 2>$null
 if ($LASTEXITCODE -ne 0 -or -not $version) { $version = "dev" }
 
@@ -27,10 +25,7 @@ if ($LASTEXITCODE -ne 0 -or -not $branch) { $branch = "unknown" }
 
 $buildDate = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
 
-$ldflags = "-X '${pkgPath}.version=${version}' " +
-           "-X '${pkgPath}.commit=${commit}' " +
-           "-X '${pkgPath}.branch=${branch}' " +
-           "-X '${pkgPath}.buildDate=${buildDate}'"
+$ldflags = "-X main.version=${version} -X main.commit=${commit} -X main.branch=${branch} -X main.buildDate=${buildDate}"
 
 $env:CGO_ENABLED = "0"
 $env:GOOS        = "linux"
