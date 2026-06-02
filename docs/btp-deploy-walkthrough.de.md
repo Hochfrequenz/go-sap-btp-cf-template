@@ -19,7 +19,7 @@ Dieses Walkthrough ergänzt sie um reale URLs, tatsächlich beobachtete Cockpit-
 
 ## Phase 0 — Werkzeuge bereitstellen
 
-### 0.1  Cloud Foundry CLI via winget installieren
+### 0.1 Cloud Foundry CLI via winget installieren
 
 Zuerst über `winget search` die korrekte Paket-ID ermittelt.
 Wichtig, weil eine naive Vermutung (`CloudFoundry.CloudFoundryCLI`) **fehlschlägt**:
@@ -40,7 +40,7 @@ winget install --id CloudFoundry.CLI.v8 `
 
 Die Installation legt `cf` und `cf8` als CLI-Aliase an und aktualisiert die System-PATH-Variable.
 
-### 0.2  Go 1.26 via winget installieren
+### 0.2 Go 1.26 via winget installieren
 
 ```powershell
 winget search --id GoLang.Go
@@ -52,7 +52,7 @@ winget install --id GoLang.Go `
 
 Das Repo pinnt in `go.mod` auf `go 1.26`, und 1.26.2 erfüllt das.
 
-### 0.3  Fallstrick: PATH in bestehenden Shells
+### 0.3 Fallstrick: PATH in bestehenden Shells
 
 winget schreibt neue Einträge in die System- und User-PATH-Variable.
 **Bereits geöffnete Terminals sehen diese Änderung nicht.**
@@ -75,7 +75,7 @@ go version     # go version go1.26.2 windows/amd64
 
 Ziel dieser Phase: Die Region-Kennung (`eu10`, `us10`, …) herausfinden, die später in `cf api` und `vars.yml` fließt.
 
-### 1.1  Generischen Cockpit-Einstieg ansteuern
+### 1.1 Generischen Cockpit-Einstieg ansteuern
 
 Im Browser (hier: Playwright-gesteuertes Chromium):
 
@@ -91,25 +91,25 @@ https://emea.cockpit.btp.cloud.sap/cockpit
 ```
 
 > **Abweichung zu Issue #4, Sektion 0.**
-> Der Hinweis dort — *"Verify at: `https://cockpit.<region>.hana.ondemand.com/`"* — ist veraltet.
+> Der Hinweis dort — _"Verify at: `https://cockpit.<region>.hana.ondemand.com/`"_ — ist veraltet.
 > Die aktuelle EMEA-Cockpit-URL ist `https://emea.cockpit.btp.cloud.sap/cockpit`.
 > Der generische Einstieg `https://account.hana.ondemand.com/` funktioniert weiterhin und leitet korrekt weiter.
 
-### 1.2  SSO-Login
+### 1.2 SSO-Login
 
 Der Cockpit zeigte einen Anmelden-Button; nach Klick lief die SAP-ID-Service- bzw. IdP-Authentifizierung durch.
 Für dieses Protokoll wurde der Login vom Menschen durchgeführt, nicht durch den Browser-Automaten.
 
 Nach erfolgreichem Login: angemeldet als `Konstantin Klein (konstantin.klein@hochfrequenz.de)`.
 
-### 1.3  Global Account wählen
+### 1.3 Global Account wählen
 
-Der Cockpit fragte: *"Wählen Sie Ihr globales Konto"*.
+Der Cockpit fragte: _"Wählen Sie Ihr globales Konto"_.
 Zur Auswahl standen:
 
-| Global Account | Subdomain |
-| --- | --- |
-| **HF Dev Account** | `hochfrequenzunternehmensberatunggmbh` |
+| Global Account                         | Subdomain                                 |
+| -------------------------------------- | ----------------------------------------- |
+| **HF Dev Account**                     | `hochfrequenzunternehmensberatunggmbh`    |
 | Hochfrequenz Unternehmensberatung GmbH | `hochfrequenzunternehmensberatunggmbh-02` |
 
 **Entscheidung:** `HF Dev Account`, weil das MWE explizit ein Entwicklungs- bzw. Experimentier-Artefakt ist.
@@ -121,19 +121,19 @@ Ergebnis-URL:
 https://emea.cockpit.btp.cloud.sap/cockpit#/globalaccount/CA10691993TID000000000740400366/accountModel…
 ```
 
-### 1.4  Subaccounts sichten
+### 1.4 Subaccounts sichten
 
 Im HF Dev Account existieren **zwei** Subaccounts:
 
-| Subaccount | Provider | Region (Cockpit-Anzeige) | Umgebung |
-| --- | --- | --- | --- |
-| **HF CloudFoundry** | AWS | Europe (Frankfurt) – AWS | Umgebungsübergreifend (Cloud Foundry) |
-| Hochfrequenz Unternehmensberatung GmbH | SAP (Neo) | Europe (Rot) | **Neo** — wird zum 31.12.2028 eingestellt |
+| Subaccount                             | Provider  | Region (Cockpit-Anzeige) | Umgebung                                  |
+| -------------------------------------- | --------- | ------------------------ | ----------------------------------------- |
+| **HF CloudFoundry**                    | AWS       | Europe (Frankfurt) – AWS | Umgebungsübergreifend (Cloud Foundry)     |
+| Hochfrequenz Unternehmensberatung GmbH | SAP (Neo) | Europe (Rot)             | **Neo** — wird zum 31.12.2028 eingestellt |
 
 **Entscheidung:** `HF CloudFoundry`.
 Der Neo-Subaccount scheidet aus: das MWE zielt explizit auf Cloud Foundry, und Neo befindet sich bereits in der Auslaufphase.
 
-### 1.5  API-Endpunkt ablesen → Region
+### 1.5 API-Endpunkt ablesen → Region
 
 Klick auf die Kachel **HF CloudFoundry** öffnet die Subaccount-Übersicht.
 Dort steht im Block **Cloud Foundry**:
@@ -149,47 +149,47 @@ Daraus direkt abgelesen:
 
 Diese beiden Werte fließen in die folgenden Schritte der Issue-#4-Checkliste ein:
 
-| Datei / Kommando | Wert |
-| --- | --- |
-| `cf api https://api.cf.<region>.hana.ondemand.com` | `eu10` |
-| `vars.yml` → Feld `domain:` | `cfapps.eu10.hana.ondemand.com` |
+| Datei / Kommando                                   | Wert                            |
+| -------------------------------------------------- | ------------------------------- |
+| `cf api https://api.cf.<region>.hana.ondemand.com` | `eu10`                          |
+| `vars.yml` → Feld `domain:`                        | `cfapps.eu10.hana.ondemand.com` |
 
 ---
 
 ## Phase 2 — Cockpit-Verifikationen (Issue #4, Sektion 0)
 
-### 2.1  Subaccount-Übersicht sichten
+### 2.1 Subaccount-Übersicht sichten
 
 Im Subaccount `HF CloudFoundry` wurden auf der Übersichtsseite folgende Kernwerte abgelesen:
 
-| Feld | Wert |
-| --- | --- |
-| Subdomain | `hf-cf` |
-| Region | Europe (Frankfurt) – AWS |
-| CF API Endpoint | `https://api.cf.eu10.hana.ondemand.com` |
-| Org Name | `HF Dev Account_hf-cf` |
-| Org ID | `6bb025f9-f118-4112-9c07-9b35627e4f0f` |
-| Org Memory Limit | 2.048 MB |
-| Produktiveinsatz | Nein |
+| Feld             | Wert                                    |
+| ---------------- | --------------------------------------- |
+| Subdomain        | `hf-cf`                                 |
+| Region           | Europe (Frankfurt) – AWS                |
+| CF API Endpoint  | `https://api.cf.eu10.hana.ondemand.com` |
+| Org Name         | `HF Dev Account_hf-cf`                  |
+| Org ID           | `6bb025f9-f118-4112-9c07-9b35627e4f0f`  |
+| Org Memory Limit | 2.048 MB                                |
+| Produktiveinsatz | Nein                                    |
 
 Der Subaccount enthält bereits **4 Spaces** mit insgesamt 15 Applikationen und 16 Service-Instanzen:
 
-| Space | Apps | Service-Instanzen |
-| --- | --- | --- |
-| `dev` | 11 | 10 |
-| `listener` | 2 | 3 |
-| `process-diagram` | 2 | 3 |
-| `prod` | 0 | 0 |
+| Space             | Apps | Service-Instanzen |
+| ----------------- | ---- | ----------------- |
+| `dev`             | 11   | 10                |
+| `listener`        | 2    | 3                 |
+| `process-diagram` | 2    | 3                 |
+| `prod`            | 0    | 0                 |
 
 **Entscheidung:** Deploy in den bestehenden `dev`-Space.
 Ein eigener Space (z. B. `go-btp-mwe`) wäre sauberer isoliert, setzt aber Subaccount-Admin-Rechte voraus und ist nicht zwingend nötig.
 
 > **Beobachtung (potenzieller Blocker):** Im Cockpit erscheint oben der Hinweis
-> *"Einige Daten und Funktionen auf dieser Seite sind nicht für Sie verfügbar. Sie müssen Administrator eines globalen Kontos oder Unterkontos sein."*
+> _"Einige Daten und Funktionen auf dieser Seite sind nicht für Sie verfügbar. Sie müssen Administrator eines globalen Kontos oder Unterkontos sein."_
 > Damit könnten Schritte 4b (Role Collection anlegen) und 4c (Destination anlegen) aus Issue #4 an fehlenden Admin-Rechten scheitern.
 > Wir gehen vorläufig weiter und wissen spätestens in Phase 4 Bescheid.
 
-### 2.2  Cloud Connector verifizieren
+### 2.2 Cloud Connector verifizieren
 
 Navigation: **Konnektivität → Cloud-Connectors**.
 
@@ -205,13 +205,13 @@ Daraus folgen zwei verwertbare Erkenntnisse:
 2. Weil es nur genau **eine** Cloud-Connector-Verbindung gibt (Location ID `(default)`), muss in Sektion 4c **kein** `CloudConnectorLocationId` auf der Destination gesetzt werden.
 
 > **Abweichung zu Issue #4, Sektion 0:**
-> Der Checklisten-Text sagt, die CC-Zeile müsse *"Connected (grün)"* anzeigen.
+> Der Checklisten-Text sagt, die CC-Zeile müsse _"Connected (grün)"_ anzeigen.
 > Das aktuelle Cockpit zeigt **keinen** farbigen Pro-Zeile-Status, sondern stattdessen oben einen Zähler `Aktive Verbindungen: N` und listet unten die Location-IDs der gerade verbundenen Cloud Connectors.
 > Erscheint die Location-ID im Grid, gilt der CC als verbunden.
 
-### 2.3  Entitlements (nicht verifizierbar)
+### 2.3 Entitlements (nicht verifizierbar)
 
-Ein eigener Nav-Eintrag *"Berechtigungen / Entitlements"* war in der linken Navigation **nicht sichtbar**.
+Ein eigener Nav-Eintrag _"Berechtigungen / Entitlements"_ war in der linken Navigation **nicht sichtbar**.
 Wahrscheinliche Ursache: fehlende Admin-Rechte (passt zur obigen Warnmeldung).
 
 **Vorgehen:** Wir überspringen die explizite Entitlement-Verifikation und lassen das spätere `cf create-service` in Sektion 2 als De-facto-Prüfung laufen.
@@ -222,7 +222,7 @@ Falls doch nicht, schlägt `cf create-service` explizit mit einem Entitlement-Fe
 
 ## Phase 3 — CF-CLI-Login und lokales Preflight (Issue #4, Sektion 1)
 
-### 3.1  API-Endpunkt setzen und anmelden
+### 3.1 API-Endpunkt setzen und anmelden
 
 ```powershell
 cf api https://api.cf.eu10.hana.ondemand.com     # setzt den Endpunkt für die Session
@@ -242,21 +242,21 @@ org:            HF Dev Account_hf-cf
 space:          dev
 ```
 
-### 3.2  Preflight-Checks
+### 3.2 Preflight-Checks
 
-| Kommando | Ergebnis |
-| --- | --- |
-| `go test ./...` | ✅ alle Tests grün |
-| `go test ./... -race` | ❌ `-race requires cgo; enable cgo by setting CGO_ENABLED=1` — unter Windows ohne MinGW-gcc nicht verfügbar; CI läuft auf Linux mit `-race`, darum lokal übersprungen |
-| `go vet ./...` | ✅ sauber |
-| `cf buildpacks \| grep -i go` | ✅ `go_buildpack cflinuxfs4 v1.10.44` → klassisches CF-Buildpack, **kein** Paketo |
-| `cp vars.example.yml vars.yml` | ✅ Default `cfapps.eu10.hana.ondemand.com` bereits korrekt — keine Editierung nötig |
+| Kommando                       | Ergebnis                                                                                                                                                              |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `go test ./...`                | ✅ alle Tests grün                                                                                                                                                    |
+| `go test ./... -race`          | ❌ `-race requires cgo; enable cgo by setting CGO_ENABLED=1` — unter Windows ohne MinGW-gcc nicht verfügbar; CI läuft auf Linux mit `-race`, darum lokal übersprungen |
+| `go vet ./...`                 | ✅ sauber                                                                                                                                                             |
+| `cf buildpacks \| grep -i go`  | ✅ `go_buildpack cflinuxfs4 v1.10.44` → klassisches CF-Buildpack, **kein** Paketo                                                                                     |
+| `cp vars.example.yml vars.yml` | ✅ Default `cfapps.eu10.hana.ondemand.com` bereits korrekt — keine Editierung nötig                                                                                   |
 
 > **Beobachtung:** `vars.yml` ist nicht in `.gitignore`.
 > Enthält hier nur Hostname und Domain (keine Geheimnisse), sollte aber der Konsistenz halber ignoriert werden.
 > Follow-up.
 
-### 3.3  Kollisions-Prechecks
+### 3.3 Kollisions-Prechecks
 
 Im bestehenden `dev`-Space:
 
@@ -294,7 +294,7 @@ Alle drei Instanzen waren nach ca. 10 s vorhanden.
 Zwei Fehlschläge vor dem erfolgreichen Push.
 Die Details sind wichtig, weil beide Fehlermodi in der Checkliste nicht gewarnt waren.
 
-### 5.1  Erster Fehlschlag — Route-Kontingent überschritten
+### 5.1 Erster Fehlschlag — Route-Kontingent überschritten
 
 ```
 FAILED
@@ -328,7 +328,7 @@ cf delete hf-learn -f -r
 Überraschung: obwohl `cf routes` im `dev`-Space nur eine Route für `hf-learn` zeigte, hat das Löschen mit `-r` **drei** Routen-Slots freigegeben (org-weit, inklusive Orphan-Routen aus anderen Spaces).
 Route-Count nach Löschung: `17/20`.
 
-### 5.2  Zweiter Fehlschlag — Buildpack findet `main` nicht
+### 5.2 Zweiter Fehlschlag — Buildpack findet `main` nicht
 
 Staging lief, dann:
 
@@ -348,20 +348,20 @@ Der bisherige Kommentar in `manifest.yml` und die README hatten das falsch darge
 **Fix:** `GO_INSTALL_PACKAGE_SPEC: ./cmd/server` als `env:` auf der Backend-App setzen.
 Der zugehörige PR ist [#8](https://github.com/Hochfrequenz/go-sap-btp-cf-template/pull/8).
 
-### 5.3  Beobachtung zu Go-Versionen (kein Fehler, aber Risiko)
+### 5.3 Beobachtung zu Go-Versionen (kein Fehler, aber Risiko)
 
 Das Buildpack installiert **Go 1.23.12**, obwohl `go.mod` `go 1.26` verlangt.
 Go 1.23 ist mit dem 1.26-Release (Feb 2026) EOL gegangen.
 Der Build hat in unserem Fall trotzdem funktioniert — entweder zieht Gos Auto-Toolchain-Feature `go 1.26` über das Netzwerk (BTP-Stager erlaubt hier offenbar Egress), oder der Code nutzt keine post-1.23-Features.
 Wird ein zukünftiger Commit 1.26-Features nutzen, schlägt der Build ohne Vorwarnung fehl.
 
-### 5.4  Dritter Versuch — grün
+### 5.4 Dritter Versuch — grün
 
 Nach dem Fix erreichten beide Apps `running 1/1`:
 
-| App | URL | RAM | Status |
-| --- | --- | --- | --- |
-| `go-btp-mwe` | `https://go-btp-mwe.cfapps.eu10.hana.ondemand.com` | 19,9 MB / 128 MB | running |
+| App              | URL                                                    | RAM              | Status  |
+| ---------------- | ------------------------------------------------------ | ---------------- | ------- |
+| `go-btp-mwe`     | `https://go-btp-mwe.cfapps.eu10.hana.ondemand.com`     | 19,9 MB / 128 MB | running |
 | `go-btp-mwe-web` | `https://go-btp-mwe-web.cfapps.eu10.hana.ondemand.com` | 61,9 MB / 128 MB | running |
 
 Smoke-Test:
@@ -377,7 +377,7 @@ Invoke-WebRequest https://go-btp-mwe-web.cfapps.eu10.hana.ondemand.com/healthz
 
 ## Phase 6 — Post-Deploy-Konfiguration und End-to-End-Smoke (Issue #4, Sektionen 4a/5/7)
 
-### 6.1  Sektion 4a — Redirect-URIs an XSUAA übermitteln
+### 6.1 Sektion 4a — Redirect-URIs an XSUAA übermitteln
 
 Approuter-Route aus Phase 5 ablesen:
 
@@ -406,12 +406,14 @@ cf update-service go-xsuaa -c xs-security.json
 Direkt danach `git restore xs-security.json`, damit die deploy-spezifische URL nicht aus Versehen committet wird.
 Das Repo versendet `redirect-uris: []` — jede Person passt das lokal pro Deploy an.
 
-### 6.2  Sektion 7 — JWT-Audience und -Issuer entsprechen nicht der Code-Erwartung
+### 6.2 Sektion 7 — JWT-Audience und -Issuer entsprechen nicht der Code-Erwartung
 
 `GET /api/me` lieferte nach 4a direkt:
 
 ```json
-{"error":"invalid token: token has invalid claims: token has invalid audience, token has invalid issuer"}
+{
+  "error": "invalid token: token has invalid claims: token has invalid audience, token has invalid issuer"
+}
 ```
 
 Statt einen Debug-Push mit Claim-Logging einzuspielen (der Stager litt unter Netzwerk-/Memory-Limits, siehe unten), wurde die tatsächliche Token-Form **ohne** Redeploy ermittelt:
@@ -431,33 +433,33 @@ Statt einen Debug-Push mit Claim-Logging einzuspielen (der Stager litt unter Net
 
 Ergebnis:
 
-| Claim | Code-Erwartung (alt) | XSUAA-Realität |
-| --- | --- | --- |
-| `aud` | `xsuaa.XSAppName` — `go-btp-mwe!t7878` | `["openid", "sb-go-btp-mwe!t7878"]` (= `ClientID`) |
+| Claim | Code-Erwartung (alt)                                                           | XSUAA-Realität                                                                                                |
+| ----- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------- |
+| `aud` | `xsuaa.XSAppName` — `go-btp-mwe!t7878`                                         | `["openid", "sb-go-btp-mwe!t7878"]` (= `ClientID`)                                                            |
 | `iss` | `trimSlash(xsuaa.URL)` — `https://hf-cf.authentication.eu10.hana.ondemand.com` | `http://hf-cf.localhost:8080/uaa/oauth/token` — ein SAP-internes Literal, nicht aus `VCAP_SERVICES` ableitbar |
 
 Fix in [PR #11](https://github.com/Hochfrequenz/go-sap-btp-cf-template/pull/11): `jwt.WithAudience(xsuaa.ClientID)` und `WithIssuer` ganz fallen lassen.
 Sicherheit bleibt erhalten, weil die JWKS-URL aus dem gebundenen `xsuaa.URL` abgeleitet wird — ein Token aus einem fremden XSUAA-Tenant scheitert schon an der Signaturprüfung.
 
-### 6.3  Phase 5 — vollständiger Smoke durch alle drei Layer
+### 6.3 Phase 5 — vollständiger Smoke durch alle drei Layer
 
 Zum Deploy-Zeitpunkt existierten im `HF CloudFoundry`-Subaccount bereits zwei on-prem Destinationen (`HF_S4`, `HF_S4_210`) plus eine Internet-Destination (`S4HANA_TEST`).
 Es wurde keine neue Destination angelegt; der Go-Code ist bzgl. Destination-Namen nicht fest verdrahtet (`/api/sap/<destination>/...`).
 
 Die drei Smoke-Checks ergaben:
 
-| Check | URL | Ergebnis |
-| --- | --- | --- |
-| `/healthz` | `https://go-btp-mwe-web.cfapps.eu10.hana.ondemand.com/healthz` | `200 ok` in <20 ms, kein Auth |
-| `/api/me` | `https://go-btp-mwe-web.cfapps.eu10.hana.ondemand.com/api/me` | `200` + JSON mit `email`, `given_name`, `family_name`, `scope`, `xs.system.attributes.xs.rolecollections` |
-| `/api/sap/HF_S4/sap/bc/adt/discovery` | auf derselben Host | `200 application/atomsvc+xml`, 23 KB ADT-Service-Dokument aus dem on-prem S/4 |
+| Check                                 | URL                                                            | Ergebnis                                                                                                  |
+| ------------------------------------- | -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `/healthz`                            | `https://go-btp-mwe-web.cfapps.eu10.hana.ondemand.com/healthz` | `200 ok` in <20 ms, kein Auth                                                                             |
+| `/api/me`                             | `https://go-btp-mwe-web.cfapps.eu10.hana.ondemand.com/api/me`  | `200` + JSON mit `email`, `given_name`, `family_name`, `scope`, `xs.system.attributes.xs.rolecollections` |
+| `/api/sap/HF_S4/sap/bc/adt/discovery` | auf derselben Host                                             | `200 application/atomsvc+xml`, 23 KB ADT-Service-Dokument aus dem on-prem S/4                             |
 
 Der letzte Aufruf exerziert in einem Hop: Approuter → XSUAA → Go-Backend → Destination-Service → Connectivity-Service → Cloud-Connector-Tunnel → on-prem ABAP ADT.
 `/sap/bc/adt/discovery` ist der Standard-CSRF-Preflight-Endpoint aus `Hochfrequenz/adtler` (`adt/client.go:267`) und verlangt nur authentifiziert-als-ADT-Entwickler-Rechte; damit als "erste Probe" für jede neue on-prem-Destination geeignet.
 
 Ein vorheriger Versuch mit `/sap/public/info` lieferte `403` aus dem S/4, aber nicht aus Pipeline-Gründen — die Destination-Auth war erfolgreich (970 ms Latenz war der echte Netzwerk-Roundtrip), nur das Ziel-Endpoint verlangt eine Admin-Rolle, die der Destination-User nicht besitzt. Wichtig für die Wiederholung: `401` zählt bei SAP gegen Login-Lockout, `403` nicht — also nicht in Schleifen-Experimenten `401`-generierende Endpoints anpieken.
 
-### 6.4  Deploy-Strategie: `binary_buildpack`-Override
+### 6.4 Deploy-Strategie: `binary_buildpack`-Override
 
 Für den Fix-Deploy mit dem JWT-Patch scheiterte der klassische `go_buildpack` zweimal:
 
@@ -523,6 +525,6 @@ Dieses Walkthrough ist als chronologisches Protokoll bewusst nicht umgeschrieben
 - **SAP-HTTP-Status sichtbar im non-2xx-Detail** (PR [#70](https://github.com/Hochfrequenz/go-sap-btp-cf-template/pull/70), Issue [#68](https://github.com/Hochfrequenz/go-sap-btp-cf-template/issues/68)) — direkter Komplement zu #69 für den anderen Fehlerpfad: wenn `svc.CallOnPremise` ohne Fehler zurückkommt, aber SAP einen non-2xx-Status liefert, schickte der Envelope vorher `"on-premise call returned non-2xx"` — der konkrete Status musste aus den Backend-Logs gegraben werden (genau das Debug-Pain aus #67). `btp.OnPremNon2xxDetail(status)` rendert jetzt `"on-premise system returned HTTP <status>"`; sowohl `examples/adtdiscovery` (huma-Pfad) als auch `examples/adtcheckrun` (gin/`AbortError`-Pfad) nutzen den Helper. Body und Reason-Phrase bleiben bewusst draußen (Body kann interne SAP-Details leaken; Reason ist clientseitig aus dem Status ableitbar).
 - **CI-Gate gegen das `git restore xs-security.json`-Vergessen** (PR [#74](https://github.com/Hochfrequenz/go-sap-btp-cf-template/pull/74), Issue [#72](https://github.com/Hochfrequenz/go-sap-btp-cf-template/issues/72)) — Sektion 6.1 (Schritt 4a) verlangt, `xs-security.json` lokal zu editieren, an XSUAA zu senden und sofort `git restore` zu rufen. Wer das `git restore` vergisst, committet eine deploy-spezifische Approuter-URL in den canonical Tree — und jeder Downstream-Fork startet ab dann tainted. Der neue Step in `template-guards.yml` parsed `xs-security.json` mit `jq` und schlägt CI fehl, wenn `oauth2-configuration.redirect-uris` nicht leer ist; Fehler-Message nennt das Fix-Kommando explizit. README §5a hat eine Safety-Net-Notiz, die auf das Gate verweist.
 - **Destination-Name wird jetzt von `apply-config` umgeschrieben** (PR [#75](https://github.com/Hochfrequenz/go-sap-btp-cf-template/pull/75), Issue [#71](https://github.com/Hochfrequenz/go-sap-btp-cf-template/issues/71)) — vorher leakte das Literal `"HF_S4"` in 3 Beispiel-Handler + 3 Tests, ohne dass `apply-config` das mitbekam. Erster Deploy eines Forks wäre auf jedem Endpoint mit `upstream_unreachable` gestorben, weil die Handler eine HF-spezifische Destination angefragt haben, die im Fork-Subaccount nicht existiert. Jetzt: `config.yml` hat einen `examples:`-Block mit `destination_name`, ein neuer Walker (`planExamplesDestination` — gleiche Form wie `planGoImports`) findet das aktuelle Literal und ersetzt es im ganzen `examples/**/*.go`-Teilbaum. Default ist weiterhin `"HF_S4"` für Backward-Compat; bestehende Forks bleiben unangetastet.
-- **README-Subsection "Not rewritten — manual fork chores" + Bit-Rot-Gate** (PR [#76](https://github.com/Hochfrequenz/go-sap-btp-cf-template/pull/76), Issue [#73](https://github.com/Hochfrequenz/go-sap-btp-cf-template/issues/73)) — Komplement zu #71: die Dinge, die `apply-config` *nicht* anfasst (LICENSE-Copyright, CODEOWNERS-Team, README-Prosa, Walkthrough), bekommen eine eigene Tabelle in der README direkt nach den Rewriter-Properties, jeweils mit dem `rg`-Kommando zum Auffinden. `template-guards.yml` lässt jeden dokumentierten `rg`-Pattern auf dem upstream-Tree laufen und schlägt CI fehl, sobald ein Pattern keine Treffer mehr liefert (Bit-Rot-Signal — Item entfernt, Doku stale). Aktuell gegated: LICENSE-Copyright und CODEOWNERS-Team; README- und Walkthrough-Zeilen sind reine Doku (ihr Fehlen würde unabhängig viel kaputtmachen, das Gate brächte keinen zusätzlichen Signal-Wert).
+- **README-Subsection "Not rewritten — manual fork chores" + Bit-Rot-Gate** (PR [#76](https://github.com/Hochfrequenz/go-sap-btp-cf-template/pull/76), Issue [#73](https://github.com/Hochfrequenz/go-sap-btp-cf-template/issues/73)) — Komplement zu #71: die Dinge, die `apply-config` _nicht_ anfasst (LICENSE-Copyright, CODEOWNERS-Team, README-Prosa, Walkthrough), bekommen eine eigene Tabelle in der README direkt nach den Rewriter-Properties, jeweils mit dem `rg`-Kommando zum Auffinden. `template-guards.yml` lässt jeden dokumentierten `rg`-Pattern auf dem upstream-Tree laufen und schlägt CI fehl, sobald ein Pattern keine Treffer mehr liefert (Bit-Rot-Signal — Item entfernt, Doku stale). Aktuell gegated: LICENSE-Copyright und CODEOWNERS-Team; README- und Walkthrough-Zeilen sind reine Doku (ihr Fehlen würde unabhängig viel kaputtmachen, das Gate brächte keinen zusätzlichen Signal-Wert).
 - **`CLAUDE.md` als AI-Orientierungs-Einstieg** (PR [#79](https://github.com/Hochfrequenz/go-sap-btp-cf-template/pull/79), Issue [#77](https://github.com/Hochfrequenz/go-sap-btp-cf-template/issues/77)) — neue Datei am Repo-Root mit Regeln + Pointern, die ein AI-Assistent (Claude Code, Cursor, …) bei jedem Prompt einliest, um auf Schiene zu bleiben: Handler-Platzierung, verbotene Patterns mit Bezug auf die jeweiligen CI-Gates, Projektstruktur, Anlaufstellen wenn man stecken bleibt. Zielgruppe besonders Fork-Authors, die mit AI-Hilfe eine Go-Lücke überbrücken (z. B. ABAP-Devs). README §"Using this repo as a template" hat einen Callout, der AI-Nutzer auf `CLAUDE.md` schickt. `template-guards.yml` schlägt CI fehl, falls die Datei jemals aus `main` verschwindet — bit-rot-Schutz analog zum manual-fork-chores-Gate.
 - **Decision-Table für huma-vs-gin Handler-Stil** (PR [#80](https://github.com/Hochfrequenz/go-sap-btp-cf-template/pull/80), Issue [#78](https://github.com/Hochfrequenz/go-sap-btp-cf-template/issues/78)) — Komplement zu #77: ersetzt die alte Prosa-Erklärung in README §"OpenAPI 3.1 + Swagger UI via huma" durch eine 4-zeilige Entscheidungstabelle (GET + OpenAPI-Wert → huma; mutating + Claim-Zugriff → gin; mutating ohne Claims → gin Default; unentschieden → gin als Tie-Breaker), plus eine "verbotene Patterns"-Zeile gegen Mischung beider Stile. CLAUDE.md Schritt 1 zeigt jetzt direkt auf diese Tabelle, statt einen Platzhalter "see issue #78" zu tragen.
