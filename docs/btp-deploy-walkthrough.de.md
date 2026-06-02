@@ -105,7 +105,7 @@ https://emea.cockpit.btp.cloud.sap/cockpit
 Der Cockpit zeigte einen Anmelden-Button; nach Klick lief die SAP-ID-Service- bzw. IdP-Authentifizierung durch.
 Für dieses Protokoll wurde der Login vom Menschen durchgeführt, nicht durch den Browser-Automaten.
 
-Nach erfolgreichem Login: angemeldet als `Konstantin Klein (konstantin.klein@hochfrequenz.de)`.
+Nach erfolgreichem Login: angemeldet als `<Vorname Nachname> (<email>)`.
 
 ### 1.3 Global Account wählen
 
@@ -240,7 +240,7 @@ Nach erfolgreichem Login zeigt `cf target`:
 ```
 API endpoint:   https://api.cf.eu10.hana.ondemand.com
 API version:    3.215.0
-user:           konstantin.klein@hochfrequenz.de
+user:           <email>
 org:            HF Dev Account_hf-cf
 space:          dev
 ```
