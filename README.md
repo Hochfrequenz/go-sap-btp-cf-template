@@ -5,16 +5,16 @@ Fork it, fill in one `config.yml`, `cf push` and you get a production-grade Go b
 
 ### What's in the box
 
-| Layer | What you get |
-| --- | --- |
-| **Runtime** | [Gin](https://github.com/gin-gonic/gin) HTTP server with graceful shutdown and structured (`slog`) logging |
-| **Authentication** | XSUAA JWT validation (RS256 signature, audience, expiry) via JWKS — see [`internal/btp/auth.go`](internal/btp/auth.go) |
+| Layer                | What you get                                                                                                                                                                                                      |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Runtime**          | [Gin](https://github.com/gin-gonic/gin) HTTP server with graceful shutdown and structured (`slog`) logging                                                                                                        |
+| **Authentication**   | XSUAA JWT validation (RS256 signature, audience, expiry) via JWKS — see [`internal/btp/auth.go`](internal/btp/auth.go)                                                                                            |
 | **SAP connectivity** | Three-leg dance (XSUAA → Destination service → Connectivity proxy → Cloud Connector) with pluggable `DestinationAuthenticator` (ships `NoAuthentication` + `BasicAuthentication`; Principal Propagation plugs in) |
-| **CSRF on writes** | Automatic fetch → attach → retry; one `svc.CallOnPremiseMutating(…)` call |
-| **Typed handlers** | Two demo endpoints (`GET /api/adt-discovery`, `POST /api/adt-checkrun`) with request validation, typed responses, and one-method-fake tests |
-| **Error envelope** | `btp.AbortError` + stable JSON error shape with request IDs |
-| **CI / CD** | GitHub Actions pipeline: lint, test, template-guards, `cf push` to Cloud Foundry |
-| **Fork tooling** | `go run ./cmd/apply-config` rewrites module path, app name, CF coordinates, and destination names from `config.yml` — one command, whole tree |
+| **CSRF on writes**   | Automatic fetch → attach → retry; one `svc.CallOnPremiseMutating(…)` call                                                                                                                                         |
+| **Typed handlers**   | Two demo endpoints (`GET /api/adt-discovery`, `POST /api/adt-checkrun`) with request validation, typed responses, and one-method-fake tests                                                                       |
+| **Error envelope**   | `btp.AbortError` + stable JSON error shape with request IDs                                                                                                                                                       |
+| **CI / CD**          | GitHub Actions pipeline: lint, test, template-guards, `cf push` to Cloud Foundry                                                                                                                                  |
+| **Fork tooling**     | `go run ./cmd/apply-config` rewrites module path, app name, CF coordinates, and destination names from `config.yml` — one command, whole tree                                                                     |
 
 ### Architecture at a glance
 
@@ -38,6 +38,7 @@ flowchart LR
 ```
 
 > 🪧 First time here?
+>
 > - Just forked and need to configure → [Using this repo as a template](#using-this-repo-as-a-template)
 > - Building a new endpoint on an existing fork → [Adding your service](#adding-your-service--the-80--case)
 > - Deploying for the first time → [Deployment](#deployment)
@@ -52,7 +53,7 @@ flowchart LR
 5. [Continuous deployment](#continuous-deployment)
 6. [Local development](#local-development)
 7. [Extension points](#extension-points)
-8. [What this MWE deliberately does *not* do](#what-this-mwe-deliberately-does-not-do)
+8. [What this MWE deliberately does _not_ do](#what-this-mwe-deliberately-does-not-do)
 9. [How it works under the hood](#how-it-works-under-the-hood)
 10. [References](#references)
 
@@ -108,17 +109,18 @@ You'll find the Hochfrequenz company and account name a few times in the docs.
 `apply-config` does not touch company-specific values that are upstream attribution, per-fork ownership, or Hochfreqenz-flavoured prose - those are intentional and a fork-author should review (and likely replace) them deliberately.
 The list below is what survives `apply-config` on a freshly-forked tree, with the `rg` command to locate each:
 
-| Item | Where | How to find | Why not rewritten |
-| --- | --- | --- | --- |
-| README prose | `README.md` | reading | HF-flavoured by intent; documents the running deploy. Strip or replace as your fork sees fit. |
-| Walkthrough | `docs/btp-deploy-walkthrough.de.md` | reading | German + chronological deploy diary; Hochfrequenz-specific by design. |
-| `LICENSE` copyright line | `LICENSE` | `rg Hochfrequenz LICENSE` | Upstream attribution; usually keep + add your own copyright above. |
+| Item                     | Where                               | How to find               | Why not rewritten                                                                             |
+| ------------------------ | ----------------------------------- | ------------------------- | --------------------------------------------------------------------------------------------- |
+| README prose             | `README.md`                         | reading                   | HF-flavoured by intent; documents the running deploy. Strip or replace as your fork sees fit. |
+| Walkthrough              | `docs/btp-deploy-walkthrough.de.md` | reading                   | German + chronological deploy diary; Hochfrequenz-specific by design.                         |
+| `LICENSE` copyright line | `LICENSE`                           | `rg Hochfrequenz LICENSE` | Upstream attribution; usually keep + add your own copyright above.                            |
 
 `.github/workflows/template-guards.yml` runs each documented `rg` pattern against the upstream tree on every PR - if a row's pattern stops matching anything on this repo, the gate fails. That surfaces bit-rot (item removed without doc update) before the list quietly goes stale; forks that strip an item legitimately can drop the row from the table or relax the gate.
 
 ## Adding your service: the 80% case
 
 Building a new value-adding service on top of on-prem SAP is **two anchors**:
+
 1. an ABAP endpoint on the SAP side
 2. and a Gin handler on the Go side.
 
@@ -145,20 +147,20 @@ Green and yellow boxes are where you work; the dashed grey box is plumbing that 
 Your ABAP developer (or you, with a pair of hands on SE80 / ADT) builds the endpoint.
 Anything reachable by an ICF service node works.
 
-| ABAP framework | URL prefix | Good for |
-| --- | --- | --- |
-| RESTful BSP | `/sap/bc/rest/...` | quick custom JSON/XML endpoints |
-| ADT | `/sap/bc/adt/...` | metadata, source, and development-tool operations |
-| RAP service | `/sap/opu/odata4/sap/...` | new-style OData with transactional behaviour |
-| Legacy SOAP | `/sap/bc/soap/...` | existing SOAP web services |
+| ABAP framework | URL prefix                | Good for                                          |
+| -------------- | ------------------------- | ------------------------------------------------- |
+| RESTful BSP    | `/sap/bc/rest/...`        | quick custom JSON/XML endpoints                   |
+| ADT            | `/sap/bc/adt/...`         | metadata, source, and development-tool operations |
+| RAP service    | `/sap/opu/odata4/sap/...` | new-style OData with transactional behaviour      |
+| Legacy SOAP    | `/sap/bc/soap/...`        | existing SOAP web services                        |
 
 Three things to pin down in SAP terms before you write Go code:
 
-| What | Example | Where it's used |
-| --- | --- | --- |
-| URL path | `/sap/bc/rest/zmy_invoice_sync` | goes into `svc.CallOnPremise`'s `path` arg |
-| Authentication | Basic Auth (default) | stored on the BTP Destination, not in the Go code |
-| SAP authorization objects | `S_DEVELOP`, `S_ICF`, domain-specific roles | granted to the technical user, not the BTP user |
+| What                      | Example                                     | Where it's used                                   |
+| ------------------------- | ------------------------------------------- | ------------------------------------------------- |
+| URL path                  | `/sap/bc/rest/zmy_invoice_sync`             | goes into `svc.CallOnPremise`'s `path` arg        |
+| Authentication            | Basic Auth (default)                        | stored on the BTP Destination, not in the Go code |
+| SAP authorization objects | `S_DEVELOP`, `S_ICF`, domain-specific roles | granted to the technical user, not the BTP user   |
 
 > **One-time cockpit chore** (covered in section 5c of "Post-deploy manual steps" below): create a **Destination** in the BTP subaccount pointing at that SAP system's virtual host on the Cloud Connector, with the technical user's credentials. From then on, every Go handler reaches the SAP side through that Destination by name.
 
@@ -181,6 +183,7 @@ api.POST("/invoice-sync", invoiceSyncHandler(svc))
 ```
 
 #### Steps 2–4: the handler.
+
 The full, typed, compileable example lives at [**`examples/invoicesync/handler.go`**](examples/invoicesync/handler.go) - read that file for the complete pattern (request type with validation tags, `svc.CallOnPremise` call, response streaming).
 
 Here's a mental model-size sketch of what the file contains:
@@ -239,7 +242,7 @@ The same sanitising in Go is a struct tag and one line. Put the discipline as fa
 > [!TIP]
 > **Rule of thumb.** Every byte that reaches `svc.CallOnPremise` has already passed type checks, required-field checks, format and range checks, and enum-value checks in the Gin handler.
 > If a request can fail validation, it fails here — with a `400` and a clear message - not on the SAP side with a Short Dump.
-> Make use of [Gins integrated validation with validator tags](https://gin-gonic.com/en/docs/binding/binding-and-validation/) on the model structs. 
+> Make use of [Gins integrated validation with validator tags](https://gin-gonic.com/en/docs/binding/binding-and-validation/) on the model structs.
 
 The request type in [`examples/invoicesync/handler.go`](examples/invoicesync/handler.go) is what a validated body looks like in practice; struct tags do the heavy lifting:
 
@@ -339,10 +342,10 @@ api.GET("/admin",
 
 Two log layers, one rule each:
 
-| Layer | Fields | What it is NOT |
-| --- | --- | --- |
-| Access log in `cmd/server/main.go` — one line per request | method, path (no query), status, duration, client IP, request_id | Never user identity, never claim values, never query string. |
-| Handler-level `slog.InfoContext` (e.g. `invoicesync` emits the authenticated user for audit) | whatever the business event needs | Never a per-stage trace; keep to one line per *business event*, not per middleware. |
+| Layer                                                                                        | Fields                                                           | What it is NOT                                                                      |
+| -------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| Access log in `cmd/server/main.go` — one line per request                                    | method, path (no query), status, duration, client IP, request_id | Never user identity, never claim values, never query string.                        |
+| Handler-level `slog.InfoContext` (e.g. `invoicesync` emits the authenticated user for audit) | whatever the business event needs                                | Never a per-stage trace; keep to one line per _business event_, not per middleware. |
 
 The split exists because putting `user_name` into the access log looks convenient until you put that user's email into a `?owner=…` query string and leak PII through the side channel. Keep access logs claim-free; put audit-worthy fields where the handler knows the context.
 
@@ -375,7 +378,7 @@ What `CallOnPremiseMutating` does behind the scenes:
 
 The request body is buffered up-front so the retry can re-read it. For bodies too large to buffer, write your own handshake on top of `CallOnPremise`.
 
-For handler tests, depend on the narrow `btp.OnPremMutator` interface (same shape as `OnPremCaller`, single method `CallOnPremiseMutating`) and substitute a one-method fake. 
+For handler tests, depend on the narrow `btp.OnPremMutator` interface (same shape as `OnPremCaller`, single method `CallOnPremiseMutating`) and substitute a one-method fake.
 The CSRF logic is the service's concern, already tested in `internal/btp/service_csrf_test.go`.
 Handlers that mix reads and writes declare a composite interface at the usage site:
 
@@ -395,7 +398,7 @@ A complete example with a handler test lives in [`examples/adtcheckrun/`](exampl
 The whole codebase runs on Dave Cheney's [two-levels discipline](https://dave.cheney.net/2015/11/05/lets-talk-about-logging).
 If you're coming from Java or ABAP, the rules are probably tighter than you're used to.
 
-1. **Only two levels matter.** `INFO` is useful operational output. `DEBUG` is useful to a developer chasing a specific problem and is off by default in production. `ERROR` exists only as an output-filter knob (`LOG_LEVEL=error` for low-noise deployments), not as a level you ever *write* to - errors are returned, not logged (see rule 2).
+1. **Only two levels matter.** `INFO` is useful operational output. `DEBUG` is useful to a developer chasing a specific problem and is off by default in production. `ERROR` exists only as an output-filter knob (`LOG_LEVEL=error` for low-noise deployments), not as a level you ever _write_ to - errors are returned, not logged (see rule 2).
 2. **Errors are not a log level.** An error is a return value. Handlers return it; only the boundary that cannot return any further (the HTTP response, or `main`) logs it. `btp.AbortError` is that boundary for HTTP responses — it writes the envelope and logs the underlying Go error once, server-side, with the request ID.
 3. **`WARN` doesn't exist in this repo.** If it's serious, handle it as an error. If it isn't, log `INFO`. "Something odd happened but I'm going to continue" is where warnings accumulate that nobody ever acts on - don't write those.
 4. **One access-log line per request.** Already wired in `cmd/server/main.go`'s `requestLog`; don't add "entering handler" / "leaving handler" lines on top. If a handler needs business-event context (e.g. `invoicesync` logs `user + company_code`), emit exactly one line per business event, not per middleware stage.
@@ -411,18 +414,18 @@ Local debugging: set `LOG_LEVEL=debug` before running the server to see `DEBUG`-
 The router mounts a [huma v2](https://huma.rocks/) API on top of the same `api` group, so every handler registered through huma appears in an auto-generated OpenAPI 3.1 spec - and a Swagger UI rendered from it - with **no comments, no annotations, no manual spec to maintain**.
 This means no frickling with neither easy-to-get-wrong endpoint annotations nor badly auto-generated code from mediocre API first / code generation tools.
 
-| Path                  | Served                                      |
-| --------------------- | ------------------------------------------- |
-| `/api/openapi.json`   | OpenAPI 3.1 (JSON)                          |
-| `/api/openapi.yaml`   | Same, YAML                                  |
+| Path                    | Served                                             |
+| ----------------------- | -------------------------------------------------- |
+| `/api/openapi.json`     | OpenAPI 3.1 (JSON)                                 |
+| `/api/openapi.yaml`     | Same, YAML                                         |
 | `/api/openapi-3.0.json` | OpenAPI 3.0.3 (for tools that don't speak 3.1 yet) |
-| `/api/docs`           | Swagger UI                                  |
-| `/api/schemas/*`      | Referenced JSON Schemas                     |
+| `/api/docs`             | Swagger UI                                         |
+| `/api/schemas/*`        | Referenced JSON Schemas                            |
 
 These sit under `/api`, so the JWT middleware applies — the spec describes a JWT-gated API; reading it requires the same auth.
 Forks that want public docs can move the huma mount to the engine root in `cmd/server/main.go`'s `buildRouter`.
 
-A huma-style handler looks like this. 
+A huma-style handler looks like this.
 `examples/adtdiscovery/handler.go` is the canonical example in this repo:
 
 ```go
@@ -453,12 +456,12 @@ Add a field with `validate:"required,oneof=EUR USD GBP"` and the spec carries th
 `adtcheckrun` and `invoicesync` stay gin-style (`func(c *gin.Context)`) - they read `jwtClaims` from the gin context map for their audit log, and surfacing that to a `context.Context`-only huma handler needs a small adapter tracked as follow-up.
 Both can coexist on the same router group; pick one per handler — never mix the two styles in a single endpoint.
 
-| Need | Pick | Why |
-| --- | --- | --- |
-| Read-only (GET) and you want OpenAPI 3.1 / Swagger UI coverage | **huma** | The route auto-appears in `/openapi.json`; no manual spec wiring. |
-| Mutating (POST / PUT / DELETE / PATCH) and you need `user_name` (or any other claim) from the JWT for audit logging | **gin** | `c.MustGet("jwtClaims")` is on the hot path; `btp.AbortError` carries the typed envelope. |
-| Mutating without claim access | **gin** (default) | Same envelope shape as the rest of the typed-error story; consistent with the two existing mutating examples. |
-| Tied — could go either way | **gin** | Matches more existing examples (2 of 3); easier for fork-authors to consistency-check against the canonical patterns. |
+| Need                                                                                                                | Pick              | Why                                                                                                                   |
+| ------------------------------------------------------------------------------------------------------------------- | ----------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Read-only (GET) and you want OpenAPI 3.1 / Swagger UI coverage                                                      | **huma**          | The route auto-appears in `/openapi.json`; no manual spec wiring.                                                     |
+| Mutating (POST / PUT / DELETE / PATCH) and you need `user_name` (or any other claim) from the JWT for audit logging | **gin**           | `c.MustGet("jwtClaims")` is on the hot path; `btp.AbortError` carries the typed envelope.                             |
+| Mutating without claim access                                                                                       | **gin** (default) | Same envelope shape as the rest of the typed-error story; consistent with the two existing mutating examples.         |
+| Tied — could go either way                                                                                          | **gin**           | Matches more existing examples (2 of 3); easier for fork-authors to consistency-check against the canonical patterns. |
 
 > **Error envelope.** Huma renders errors as RFC 7807 problem-details (`{"title":"Bad Gateway","status":502,"detail":"…"}`); the gin-style handlers use `btp.ErrorEnvelope` (`{"error":{"code":"upstream_unreachable","message":"…","request_id":"…"}}`). Aware mismatch: unifying both onto `btp.ErrorEnvelope` requires overriding `huma.NewError` AND propagating `request_id` into `context.Context`, which is the same adapter as the `jwtClaims` follow-up. Until then, clients calling `/api/adt-discovery` see RFC 7807; clients calling `/api/adt-checkrun` see the typed envelope.
 
@@ -542,13 +545,13 @@ For everyday handler work the interface-plus-fake pattern above is faster and mo
 The middleware and service code hide most of the BTP specifics.
 For the 80 % case you can assume each of the following without looking:
 
-| Concern | Handled by | Assume that |
-| --- | --- | --- |
-| XSUAA `aud` / `iss` claim shapes | `internal/btp/auth.go` | the caller is authenticated if your handler runs |
-| The three-leg token dance (XSUAA → Dest → XSUAA → CC) | `internal/btp/service.go` | `svc.CallOnPremise` just works; one call, full round-trip |
-| Which headers get forwarded | `skipForwardedHeader` in `service.go` | hop-by-hop + `Authorization` + `Cookie` + `Host` are stripped; everything else flows through |
-| Path-traversal defence | `Service.CallOnPremise` | `..` in the `path` suffix is rejected before anything leaves the process |
-| XSUAA token expiry mid-request | `tokens.go` + retry in `service.go` | a stale connectivity token on a body-less call self-heals once without a 500 |
+| Concern                                               | Handled by                            | Assume that                                                                                  |
+| ----------------------------------------------------- | ------------------------------------- | -------------------------------------------------------------------------------------------- |
+| XSUAA `aud` / `iss` claim shapes                      | `internal/btp/auth.go`                | the caller is authenticated if your handler runs                                             |
+| The three-leg token dance (XSUAA → Dest → XSUAA → CC) | `internal/btp/service.go`             | `svc.CallOnPremise` just works; one call, full round-trip                                    |
+| Which headers get forwarded                           | `skipForwardedHeader` in `service.go` | hop-by-hop + `Authorization` + `Cookie` + `Host` are stripped; everything else flows through |
+| Path-traversal defence                                | `Service.CallOnPremise`               | `..` in the `path` suffix is rejected before anything leaves the process                     |
+| XSUAA token expiry mid-request                        | `tokens.go` + retry in `service.go`   | a stale connectivity token on a body-less call self-heals once without a 500                 |
 
 If you do hit a wall, [How it works under the hood](#how-it-works-under-the-hood) near the bottom of this README has the full diagram and the per-layer invariants.
 
@@ -638,7 +641,7 @@ Two conventions to keep in mind while reading this section:
    echo "Quota: $(cf curl "/v3/organization_quotas/$QUOTA_GUID"                  | jq .routes.total_routes)"
    ```
 
-   If you're within 2 of the quota, either free slots by removing a stopped app with its routes (`cf delete <app-name> -r -f` — note that `-r` can free *more* slots than `cf routes` in the current space suggested, because orphan routes from other spaces travel with the app), or ask a global-account admin to raise the quota.
+   If you're within 2 of the quota, either free slots by removing a stopped app with its routes (`cf delete <app-name> -r -f` — note that `-r` can free _more_ slots than `cf routes` in the current space suggested, because orphan routes from other spaces travel with the app), or ask a global-account admin to raise the quota.
    Symptom when ignored: `Routes quota exceeded for organization '<org>'`, raised before staging begins.
 
 2. **You MUST cross-compile `./bin/server` before `cf push`.**
@@ -739,15 +742,15 @@ The `/api/*` routes this MWE ships with do **not** enforce the `User` scope — 
 
 BTP cockpit → subaccount → Connectivity → **Destinations** → New Destination:
 
-| Field | Value |
-| --- | --- |
-| **Name** | `HfSap` (the destination name your handlers hard-code — e.g. `adtdiscovery` and `adtcheckrun` reference `HF_S4` — plus anything a fork adds) |
-| **Type** | `HTTP` |
-| **URL** | virtual host as exposed by the Cloud Connector (e.g. `http://hfsap.cc:8000`) |
-| **Proxy Type** | `OnPremise` |
-| **Authentication** | `BasicAuthentication` (or `NoAuthentication` for a smoke-test endpoint) |
-| **User / Password** | the SAP account on the on-prem system |
-| **Additional Properties** (optional) | `CloudConnectorLocationId` = `<your location ID>` if you have multiple CCs |
+| Field                                | Value                                                                                                                                        |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Name**                             | `HfSap` (the destination name your handlers hard-code — e.g. `adtdiscovery` and `adtcheckrun` reference `HF_S4` — plus anything a fork adds) |
+| **Type**                             | `HTTP`                                                                                                                                       |
+| **URL**                              | virtual host as exposed by the Cloud Connector (e.g. `http://hfsap.cc:8000`)                                                                 |
+| **Proxy Type**                       | `OnPremise`                                                                                                                                  |
+| **Authentication**                   | `BasicAuthentication` (or `NoAuthentication` for a smoke-test endpoint)                                                                      |
+| **User / Password**                  | the SAP account on the on-prem system                                                                                                        |
+| **Additional Properties** (optional) | `CloudConnectorLocationId` = `<your location ID>` if you have multiple CCs                                                                   |
 
 Once this exists (and a handler that references it by name is wired in `buildRouter` — `adtdiscovery` / `adtcheckrun` reference `HF_S4`), calls through that handler will work. Until the destination exists, the handler returns a typed `upstream_unreachable` 502 envelope.
 
@@ -820,10 +823,10 @@ Why `/sap/bc/adt/discovery` as the probe: it's a standard ABAP Development Tools
 
 ### Required repository secrets
 
-| Secret | What it is |
-| --- | --- |
-| `CF_USER` | Email address of a SAP ID Service account with the `SpaceDeveloper` role on the deploy target space. |
-| `CF_PASSWORD` | That account's SAP ID Service password. |
+| Secret        | What it is                                                                                           |
+| ------------- | ---------------------------------------------------------------------------------------------------- |
+| `CF_USER`     | Email address of a SAP ID Service account with the `SpaceDeveloper` role on the deploy target space. |
+| `CF_PASSWORD` | That account's SAP ID Service password.                                                              |
 
 Set both at **Settings → Secrets and variables → Actions → New repository secret**.
 If either is missing, the deploy job fails loudly at `cf auth` instead of silently pushing with empty credentials.
@@ -922,25 +925,25 @@ Three different timeouts gate it; two are set by this template, the third is dep
 
 **HTTP server (`cmd/server/main.go`):**
 
-| Setting             | Default | Why                                                                           |
-| ------------------- | ------- | ----------------------------------------------------------------------------- |
-| `ReadHeaderTimeout` | 10 s    | Slowloris on request headers.                                                 |
-| `ReadTimeout`       | 60 s    | Slow-body POSTs (client → server). Request bodies are small JSON.             |
-| `WriteTimeout`      | 900 s   | Bounds *total* handler runtime — `WriteTimeout` starts at header-read, not at first write, and covers the CSRF handshake + main on-prem call + response write as one budget. Deliberately 5 min larger than `DefaultOnPremiseTimeout` so the on-prem layer reliably fires first on slow SAP. |
-| `IdleTimeout`       | 120 s   | Keep-alive sockets parked indefinitely.                                       |
+| Setting             | Default | Why                                                                                                                                                                                                                                                                                          |
+| ------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ReadHeaderTimeout` | 10 s    | Slowloris on request headers.                                                                                                                                                                                                                                                                |
+| `ReadTimeout`       | 60 s    | Slow-body POSTs (client → server). Request bodies are small JSON.                                                                                                                                                                                                                            |
+| `WriteTimeout`      | 900 s   | Bounds _total_ handler runtime — `WriteTimeout` starts at header-read, not at first write, and covers the CSRF handshake + main on-prem call + response write as one budget. Deliberately 5 min larger than `DefaultOnPremiseTimeout` so the on-prem layer reliably fires first on slow SAP. |
+| `IdleTimeout`       | 120 s   | Keep-alive sockets parked indefinitely.                                                                                                                                                                                                                                                      |
 
 **On-prem HTTP client (`btp.DefaultOnPremiseTimeout`):**
 
-| Setting                    | Default | Why                                                                  |
-| -------------------------- | ------- | -------------------------------------------------------------------- |
-| `DefaultOnPremiseTimeout`  | 600 s   | Per-call timeout on `*btp.Service`'s on-prem `*http.Client`. ADT-through-CC calls regularly take minutes; observed worst case ~5 minutes. 10 minutes is the per-call ceiling. Override per-instance with `btp.WithOnPremiseTimeout(...)` when the fork's SAP is reliably faster. |
+| Setting                   | Default | Why                                                                                                                                                                                                                                                                              |
+| ------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DefaultOnPremiseTimeout` | 600 s   | Per-call timeout on `*btp.Service`'s on-prem `*http.Client`. ADT-through-CC calls regularly take minutes; observed worst case ~5 minutes. 10 minutes is the per-call ceiling. Override per-instance with `btp.WithOnPremiseTimeout(...)` when the fork's SAP is reliably faster. |
 
 The two values are intentionally **asymmetric**: `WriteTimeout` (one budget for the whole handler) sits 5 min above `DefaultOnPremiseTimeout` (one budget per on-prem call).
 On a CSRF mutating route — `HEAD/GET` for the token, then `POST` — each leg gets its own 10-min on-prem budget; the 15-min `WriteTimeout` covers both legs plus response write without racing the on-prem timeout.
 Result: a hung SAP always surfaces as a clean `upstream_unreachable` envelope from the on-prem layer, never as a server-side write timeout.
 
 **CF Gorouter (deployment-managed):** The CF route layer has its own per-request timeout (typically ~900 s, varies by foundation/landscape).
-It bounds *both* of the above — the 900 s `WriteTimeout` is intentionally aligned with that ceiling. If a fork legitimately needs longer than the route allows, raising the values here is moot — the platform owner has to extend the route timeout.
+It bounds _both_ of the above — the 900 s `WriteTimeout` is intentionally aligned with that ceiling. If a fork legitimately needs longer than the route allows, raising the values here is moot — the platform owner has to extend the route timeout.
 
 If a single handler legitimately needs longer than 900 s — large-file streaming, long-poll, exceptionally slow batch — override per-request with `http.NewResponseController(w).SetWriteDeadline(...)` (server side) **and** wrap the on-prem client (or pass a different `WithOnPremiseTimeout` to a dedicated `*btp.Service` instance for that route). Loosening the global defaults re-opens the slow-client surface for every other route.
 

@@ -30,3 +30,7 @@ vars.yml
 # today, but the directory's contents are evolving and should never be
 # accidentally staged via `git add -A`.
 .claude/
+
+# Node.js dependencies — installed by `npm ci` in CI and `npm install`
+# locally for prettier. Never committed.
+node_modules/
