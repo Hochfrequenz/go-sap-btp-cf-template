@@ -895,12 +895,6 @@ The two values are intentionally **asymmetric**: `WriteTimeout` (one budget for 
 
 If a single handler legitimately needs longer than 900 s — large-file streaming, long-poll, exceptionally slow batch — override per-request with `http.NewResponseController(w).SetWriteDeadline(...)` (server side) **and** wrap the on-prem client (or pass a different `WithOnPremiseTimeout` to a dedicated `*btp.Service` instance for that route). Loosening the global defaults re-opens the slow-client surface for every other route.
 
-## What this MWE deliberately does *not* do
-
-- **No fake `Mozilla/5.0` User-Agent.** The PHP/Python reference impersonates a browser as a HF-SAP workaround; the SAP BTP spec has no such requirement.
-- **No local-dev mock layer.** Stubbing VCAP is documented above; writing mocks into the code is where drift starts.
-- **No destination-service caching.** Destinations change rarely but we re-fetch on every request for now; add a TTL cache once there is a reason to.
-
 ## How it works under the hood
 
 You do not need this section to write a handler. It is here for when a deploy misbehaves, a token doesn't validate, or you want to understand what `svc.CallOnPremise` actually does on the wire.
