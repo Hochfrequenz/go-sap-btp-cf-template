@@ -1,5 +1,10 @@
 # BTP-Deploy-Walkthrough (Schritt-für-Schritt, reproduzierbar)
 
+> [!WARNING]
+> Dieses Vorgehen wurde für einen Hochfrequenz Sub-Account in der BTP getestet.
+> Dieser Text ist mehr ein Protokoll, was zum Deployment getan wurde und eher weniger eine kompakte Anleitung.
+> Das Vorgehen ist **prinzipiell** übertragbar aber einzelne Werte können so nicht wiederverwendet werden.
+
 Dieses Dokument protokolliert chronologisch, was beim ersten realen Deploy des MWE nach SAP BTP Cloud Foundry getan wurde — inklusive Klicks im Cockpit, ausgeführter Shell-Kommandos und getroffener Entscheidungen.
 Ziel: Ein:e andere:r Entwickler:in kann den Ablauf auf einer ähnlichen Umgebung (Windows 11, neues BTP-Konto) eins-zu-eins nachvollziehen.
 
@@ -172,14 +177,12 @@ Im Subaccount `HF CloudFoundry` wurden auf der Übersichtsseite folgende Kernwer
 | Org Memory Limit | 2.048 MB                                |
 | Produktiveinsatz | Nein                                    |
 
-Der Subaccount enthält bereits **4 Spaces** mit insgesamt 15 Applikationen und 16 Service-Instanzen:
+Der Subaccount enthält bereits **4 Spaces** mit insgesamt 15 Applikationen und 16 Service-Instanzen (Zahlen zum Zeitpunkt des ersten Deploys; Space-Namen anderer HF-Projekte werden hier nicht aufgeführt):
 
-| Space             | Apps | Service-Instanzen |
-| ----------------- | ---- | ----------------- |
-| `dev`             | 11   | 10                |
-| `listener`        | 2    | 3                 |
-| `process-diagram` | 2    | 3                 |
-| `prod`            | 0    | 0                 |
+| Space            | Apps | Service-Instanzen |
+| ---------------- | ---- | ----------------- |
+| `dev`            | 11   | 10                |
+| (weitere Spaces) | 4    | 6                 |
 
 **Entscheidung:** Deploy in den bestehenden `dev`-Space.
 Ein eigener Space (z. B. `go-btp-mwe`) wäre sauberer isoliert, setzt aber Subaccount-Admin-Rechte voraus und ist nicht zwingend nötig.
@@ -262,7 +265,7 @@ Im bestehenden `dev`-Space:
 
 - **App-Namen:** `go-btp-mwe`, `go-btp-mwe-web` existieren dort noch nicht — keine Kollision.
 - **Service-Namen:** `go-xsuaa`, `go-dest`, `go-cc` existieren dort noch nicht — keine Kollision.
-- **Entitlements:** Im Space existieren bereits Instanzen von `xsuaa/application`, `destination/lite` und `connectivity/lite` (unter anderen Namen wie `authTest`, `destinationService`, `connectivityService`, `s4md-xsuaa`).
+- **Entitlements:** Im Space existieren bereits Instanzen von `xsuaa/application`, `destination/lite` und `connectivity/lite` (unter anderen Namen, von anderen Projekten im selben Subaccount).
   Das belegt indirekt, dass die benötigten Entitlements im Subaccount vorhanden sind — der zuvor nicht verifizierbare Punkt aus Phase 2.3 ist damit erledigt.
 
 ---
@@ -319,13 +322,13 @@ Kontingent ablesen:
 cf curl /v3/organization_quotas/<quota-guid> | ConvertFrom-Json | Select-Object routes
 ```
 
-**Lösung:** Eine gestoppte App entfernt, deren Routen-Slots freizugeben:
+**Lösung:** Eine gestoppte App entfernt, um Routen-Slots freizugeben:
 
 ```powershell
-cf delete hf-learn -f -r
+cf delete <app-name> -f -r
 ```
 
-Überraschung: obwohl `cf routes` im `dev`-Space nur eine Route für `hf-learn` zeigte, hat das Löschen mit `-r` **drei** Routen-Slots freigegeben (org-weit, inklusive Orphan-Routen aus anderen Spaces).
+Überraschung: obwohl `cf routes` im `dev`-Space nur eine Route für diese App zeigte, hat das Löschen mit `-r` **drei** Routen-Slots freigegeben (org-weit, inklusive Orphan-Routen aus anderen Spaces).
 Route-Count nach Löschung: `17/20`.
 
 ### 5.2 Zweiter Fehlschlag — Buildpack findet `main` nicht
@@ -443,8 +446,8 @@ Sicherheit bleibt erhalten, weil die JWKS-URL aus dem gebundenen `xsuaa.URL` abg
 
 ### 6.3 Phase 5 — vollständiger Smoke durch alle drei Layer
 
-Zum Deploy-Zeitpunkt existierten im `HF CloudFoundry`-Subaccount bereits zwei on-prem Destinationen (`HF_S4`, `HF_S4_210`) plus eine Internet-Destination (`S4HANA_TEST`).
-Es wurde keine neue Destination angelegt; der Go-Code ist bzgl. Destination-Namen nicht fest verdrahtet (`/api/sap/<destination>/...`).
+Zum Deploy-Zeitpunkt existierten im `HF CloudFoundry`-Subaccount bereits mehrere Destinationen (on-prem und Internet) von anderen Projekten.
+Es wurde keine neue Destination angelegt; der Go-Code verwendete eine bereits vorhandene on-prem Destination.
 
 Die drei Smoke-Checks ergaben:
 
@@ -483,7 +486,7 @@ Die `manifest.yml` zeigte zum Zeitpunkt dieses Deploys weiterhin auf `go_buildpa
 ## Aktueller Stand
 
 - Phasen 0–6 abgeschlossen.
-- Beide Apps laufen, `/healthz`, `/api/me` und `/api/sap/HF_S4/sap/bc/adt/discovery` grün.
+- Beide Apps laufen, `/healthz`, `/api/me` und `/api/adt-discovery` grün (der damalige transparente Proxy `/api/sap/<destination>/...` wurde in PR #42 durch typisierte Routen ersetzt).
 - Sektion 4b (Role Collection für das benutzerdefinierte `User`-Scope) bleibt offen — blockiert durch fehlende Subaccount-Admin-Rechte, aber für den MWE nicht erforderlich, weil die Go-Middleware keine Scopes prüft.
 - Sektion 4c (Neue Destination `HfSap`) wurde bewusst übersprungen — die bestehende Destination `HF_S4` funktioniert für unseren Testzweck.
 - CD-Pipeline als langfristiges Ziel in #10 getrackt.
