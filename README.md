@@ -772,6 +772,23 @@ Expected: `HTTP/1.1 200 OK` with body `ok`. `/healthz` is explicitly marked `aut
 </details>
 
 <details>
+<summary>6a2. <code>/version</code> — build metadata baked in at compile time (no auth)</summary>
+
+```sh
+curl -s https://<approuter-host>.<domain>/version
+```
+
+Expected: a JSON body with `version`, `commit`, `branch`, and `build_date` fields set to real values (not `"unknown"` / `"dev"`):
+
+```json
+{ "branch": "main", "build_date": "2026-06-01T21:35:09Z", "commit": "60d12f1", "version": "v0.0.1" }
+```
+
+The CD pipeline checks this automatically after every deploy — if the fields are still at their defaults it means `-ldflags` injection failed during the build step, and the workflow fails. Like `/healthz`, this endpoint is marked `authenticationType: none` in `web/xs-app.json`.
+
+</details>
+
+<details>
 <summary>6b. <code>/api/me</code> — full OAuth + JWT-validation chain (needs a browser)</summary>
 
 Open in a browser — `curl` alone cannot complete the XSUAA SSO dance. Use whatever your OS opens HTTPS URLs with (`open` on macOS, `start` on Windows cmd, `xdg-open` on Linux), or paste the URL:
@@ -819,7 +836,7 @@ Why `/sap/bc/adt/discovery` as the probe: it's a standard ABAP Development Tools
 `.github/workflows/deploy.yml` deploys both apps on every **published GitHub Release** (not on push-to-main, not on plain tag pushes — only the explicit "Publish release" click). The workflow has two jobs:
 
 1. **`gate`** — `go vet`, `go test ./... -race`, `golangci-lint`, `gofmt --diff`. All four must pass green.
-2. **`deploy`** — only runs if `gate` was green. Cross-compiles a static Linux binary on the runner (same `make build-linux` a laptop would run), installs `cf` v8, pushes backend and approuter per `manifest.yml` (backend is already `binary_buildpack` with `command: ./bin/server`, approuter keeps `nodejs_buildpack`), then curls `/healthz` and fails the workflow if it isn't `200 ok`.
+2. **`deploy`** — only runs if `gate` was green. Cross-compiles a static Linux binary on the runner (same `make build-linux` a laptop would run), injects build metadata via `-ldflags` (`version`, `commit`, `branch`, `build_date`), installs `cf` v8, pushes backend and approuter per `manifest.yml` (backend is already `binary_buildpack` with `command: ./bin/server`, approuter keeps `nodejs_buildpack`), then smoke-tests `/healthz` (app is up) and `/version` (ldflags were actually injected — `commit` must not equal `"unknown"`), and fails the workflow if either check doesn't pass.
 
 ### Required repository secrets
 
