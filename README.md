@@ -36,7 +36,7 @@ flowchart LR
     style CC fill:#e9ecef,stroke:#6c757d,stroke-dasharray:5 5,color:#495057
 ```
 
-> **Signpost.** First time here?
+> 🪧 First time here?
 > - Just forked and need to configure → [Using this repo as a template](#using-this-repo-as-a-template)
 > - Building a new endpoint on an existing fork → [Adding your service](#adding-your-service--the-80--case)
 > - Deploying for the first time → [Deployment](#deployment)
@@ -54,7 +54,6 @@ flowchart LR
 8. [What this MWE deliberately does *not* do](#what-this-mwe-deliberately-does-not-do)
 9. [How it works under the hood](#how-it-works-under-the-hood)
 10. [References](#references)
-11. [License](#license)
 
 ## Repository layout
 
@@ -82,9 +81,9 @@ vars.example.yml            template for cf push --vars-file vars.yml
 
 ## Using this repo as a template
 
-All per-deployment string values (app name, Go module path, CF subaccount coordinates, service instance names, **example-handler destination name**) live in a single `config.yml` at the repo root. `cmd/apply-config` is a small Go tool that reads that file, type-checks every field, and rewrites the rest of the tree from it — `go.mod`, every Go import, `manifest.yml`, `xs-security.json`, `vars.example.yml`, `web/package.json`, `.github/workflows/deploy.yml`, and the destination-name literal across `examples/**/*.go`.
+All per-deployment string values (app name, Go module path, CF subaccount coordinates, service instance names, **example-handler destination name**) live in a single [`config.yml`](config.yml) at the repo root. `cmd/apply-config` is a small Go tool that reads that file, type-checks every field, and rewrites the rest of the tree from it - `go.mod`, every Go import, `manifest.yml`, `xs-security.json`, `vars.example.yml`, `web/package.json`, `.github/workflows/deploy.yml`, and the destination-name literal across `examples/**/*.go`.
 
-> **Using AI assistance to navigate this template?** Start with [`CLAUDE.md`](CLAUDE.md) at the repo root — rules + pointers an AI assistant reads on every prompt to stay on-rails (handler placement, forbidden patterns, where things live). The README stays the human-facing reference; `CLAUDE.md` is its AI-facing companion.
+> **Using AI assistance to navigate this template?** Start with [`CLAUDE.md`](CLAUDE.md) at the repo root - rules + pointers an AI assistant reads on every prompt to stay on-rails (handler placement, forbidden patterns, where things live). The README stays the human-facing reference; `CLAUDE.md` is its AI-facing companion.
 
 Recommended flow after forking:
 
@@ -99,29 +98,29 @@ go test ./...                                 # sanity check
 git add -A && git commit -m "chore: configure fork"
 ```
 
-Properties of the tool:
+### Not rewritten - manual fork chores
 
-- **Typed.** `config.yml` is parsed into a Go struct with aggregated validation — all problems reported in one run, same pattern as `internal/btp/env.go`.
-- **Idempotent.** Running twice with an unchanged `config.yml` is a no-op. CI can enforce that with `go run ./cmd/apply-config --check` (exit 1 if the tree drifts from the config).
-- **Fails loudly.** Each file rewriter asserts its expected shape; a drifted target returns a clear error instead of silently producing garbage.
-- **Zero internal dependencies.** The tool imports nothing from `internal/`, so it keeps working even while it's rewriting import paths.
+The documentation was written using the Hochfrequenz subscription on SAP BTP.
+You'll find the Hochfrequenz company and account name a few times in the docs.
 
-### Not rewritten — manual fork chores
-
-`apply-config` does not touch HF-specific values that are upstream attribution, per-fork ownership, or HF-flavoured prose — those are intentional and a fork-author should review (and likely replace) them deliberately. The list below is what survives `apply-config` on a freshly-forked tree, with the `rg` command to locate each:
+`apply-config` does not touch company-specific values that are upstream attribution, per-fork ownership, or Hochfreqenz-flavoured prose - those are intentional and a fork-author should review (and likely replace) them deliberately.
+The list below is what survives `apply-config` on a freshly-forked tree, with the `rg` command to locate each:
 
 | Item | Where | How to find | Why not rewritten |
 | --- | --- | --- | --- |
 | README prose | `README.md` | reading | HF-flavoured by intent; documents the running deploy. Strip or replace as your fork sees fit. |
-| Walkthrough | `docs/btp-deploy-walkthrough.de.md` | reading | German + chronological deploy diary; HF-specific by design. |
+| Walkthrough | `docs/btp-deploy-walkthrough.de.md` | reading | German + chronological deploy diary; Hochfrequenz-specific by design. |
 | `LICENSE` copyright line | `LICENSE` | `rg Hochfrequenz LICENSE` | Upstream attribution; usually keep + add your own copyright above. |
-| `CODEOWNERS` reviewer team | `.github/CODEOWNERS` | `rg Hochfrequenz .github/CODEOWNERS` | Per-fork ownership; replace `@Hochfrequenz/go-review-team` with your team. |
 
-`.github/workflows/template-guards.yml` runs each documented `rg` pattern against the upstream tree on every PR — if a row's pattern stops matching anything on this repo, the gate fails. That surfaces bit-rot (item removed without doc update) before the list quietly goes stale; forks that strip an item legitimately can drop the row from the table or relax the gate.
+`.github/workflows/template-guards.yml` runs each documented `rg` pattern against the upstream tree on every PR - if a row's pattern stops matching anything on this repo, the gate fails. That surfaces bit-rot (item removed without doc update) before the list quietly goes stale; forks that strip an item legitimately can drop the row from the table or relax the gate.
 
-## Adding your service — the 80 % case
+## Adding your service: the 80% case
 
-Building a new value-adding service on top of on-prem SAP is **two anchors**: an ABAP endpoint on the SAP side, and a Gin handler on the Go side. The BTP plumbing between them (XSUAA login, Destination lookup, Cloud Connector tunnel, Basic Auth forwarding) is already wired up and you do not need to touch it.
+Building a new value-adding service on top of on-prem SAP is **two anchors**:
+1. an ABAP endpoint on the SAP side
+2. and a Gin handler on the Go side.
+
+The BTP plumbing between them (XSUAA login, Destination lookup, Cloud Connector tunnel, Basic Auth forwarding) is already wired up and you do not need to touch it.
 
 ```mermaid
 flowchart LR
@@ -139,9 +138,10 @@ Green and yellow boxes are where you work; the dashed grey box is plumbing that 
 
 ---
 
-### Anchor 1 — in the SAP system: the ABAP endpoint
+### Anchor 1: in the SAP system: the ABAP endpoint
 
-Your ABAP developer (or you, with a pair of hands on SE80 / ADT) builds the endpoint. Anything reachable by an ICF service node works — pick the framework that fits the job:
+Your ABAP developer (or you, with a pair of hands on SE80 / ADT) builds the endpoint.
+Anything reachable by an ICF service node works.
 
 | ABAP framework | URL prefix | Good for |
 | --- | --- | --- |
@@ -162,7 +162,7 @@ Three things to pin down in SAP terms before you write Go code:
 
 ---
 
-### Anchor 2 — in this repo: the Gin handler
+### Anchor 2: in this repo: the Gin handler
 
 A handler is four mechanical steps:
 
@@ -171,14 +171,15 @@ A handler is four mechanical steps:
 3. **Call on-prem** via `svc.CallOnPremise` — one function call runs the whole three-leg dance.
 4. **Shape the response** back to the caller (stream, transform, wrap, whatever your product wants).
 
-**Step 1 — register the route.**
+#### Step 1: register the route.
 
 ```go
 // In buildRouter, next to api.GET("/me", ...):
 api.POST("/invoice-sync", invoiceSyncHandler(svc))
 ```
 
-**Steps 2–4 — the handler.** The full, typed, compileable example lives at [**`examples/invoicesync/handler.go`**](examples/invoicesync/handler.go) — read that file for the complete pattern (request type with validation tags, `svc.CallOnPremise` call, response streaming).
+#### Steps 2–4: the handler.
+The full, typed, compileable example lives at [**`examples/invoicesync/handler.go`**](examples/invoicesync/handler.go) - read that file for the complete pattern (request type with validation tags, `svc.CallOnPremise` call, response streaming).
 
 Here's a mental model-size sketch of what the file contains:
 
@@ -220,7 +221,9 @@ func Handler(svc btp.OnPremCaller) gin.HandlerFunc {
 }
 ```
 
-The template does **not** ship a transparent-proxy route by default — strict typing at the Gin boundary needs a fixed endpoint set, and the security story is much better when every path is explicit. If a fork genuinely wants a catch-all pass-through, `svc.ProxyHandler` is still a method on `*btp.Service`; wire it yourself, gate it with `btp.RequireScope("...User")`, and be deliberate about which users can reach it. **For anything that writes state on the SAP side, read the next sub-section first** — validation-before-SAP is how you keep on-prem Short Dumps out of your life.
+The template does **not** ship a transparent-proxy route by default - strict typing at the Gin boundary needs a fixed endpoint set, and the security story is much better when every path is explicit.
+If a fork genuinely wants a catch-all pass-through, `svc.ProxyHandler` is still a method on `*btp.Service`; wire it yourself, gate it with `btp.RequireScope("...User")`, and be deliberate about which users can reach it.
+**For anything that writes state on the SAP side, read the next sub-section first** - validation-before-SAP is how you keep on-prem Short Dumps out of your life.
 
 Unit-test the handler with the fixtures in `internal/btp/service_test.go`; they stand up stubs that respond like the real XSUAA / Destination / CC stack, so you can assert request shape and response translation without deploying.
 
@@ -228,11 +231,15 @@ Unit-test the handler with the fixtures in `internal/btp/service_test.go`; they 
 
 ### Validate and sanitise at the Gin layer, not in SAP
 
-Sanitising a bad payload in ABAP is painful — data-type shaping is verbose, exception handling is heavy, and you cannot easily test an error path without a full transport-request round-trip. The same sanitising in Go is a struct tag and one line. Put the discipline as far to the left as possible.
+Sanitising a bad payload in ABAP is painful - data-type shaping is verbose, exception handling is heavy, and you cannot easily test an error path without a full transport-request round-trip.
+The same sanitising in Go is a struct tag and one line. Put the discipline as far to the left as possible.
 
-> **Rule of thumb.** Every byte that reaches `svc.CallOnPremise` has already passed type checks, required-field checks, format and range checks, and enum-value checks in the Gin handler. If a request can fail validation, it fails here — with a `400` and a clear message — not on the SAP side with a Short Dump.
+> [!TIP]
+> **Rule of thumb.** Every byte that reaches `svc.CallOnPremise` has already passed type checks, required-field checks, format and range checks, and enum-value checks in the Gin handler.
+> If a request can fail validation, it fails here — with a `400` and a clear message - not on the SAP side with a Short Dump.
+> Make use of [Gins integrated validation with validator tags](https://gin-gonic.com/en/docs/binding/binding-and-validation/) on the model structs. 
 
-The request type in [`examples/invoicesync/handler.go`](examples/invoicesync/handler.go) is what a validated body looks like in practice — struct tags do the heavy lifting:
+The request type in [`examples/invoicesync/handler.go`](examples/invoicesync/handler.go) is what a validated body looks like in practice; struct tags do the heavy lifting:
 
 ```go
 type Request struct {
@@ -244,9 +251,10 @@ type Request struct {
 }
 ```
 
-Gin's binding uses [`go-playground/validator`](https://github.com/go-playground/validator); the tag vocabulary covers required / length / regex / enum / cross-field rules (`required_with`, `gtfield`, etc.). For shape-checks beyond the tag language, add a `Validate()` method on the request type and call it right after `ShouldBindJSON`.
+Gin's binding uses [`go-playground/validator`](https://github.com/go-playground/validator); the tag vocabulary covers required / length / regex / enum / cross-field rules (`required_with`, `gtfield`, etc.).
+For shape-checks beyond the tag language, add a `Validate()` method on the request type and call it right after `ShouldBindJSON`.
 
-> **Do not fool around with raw bytes.** The raw-forward pattern — reading `c.Request.Body` and piping it straight into `svc.CallOnPremise` — is what `svc.ProxyHandler` does and why the template does not wire that route by default (see previous sub-section). For every endpoint you write: unmarshal into a typed struct, validate via struct tags (or an explicit `Validate()`), marshal the ABAP-side shape yourself, and — if SAP returns XML — parse it back into Go structs and emit JSON, the way `examples/adtcheckrun/` and `examples/adtdiscovery/` do. `[]byte` and `json.RawMessage` that travel to `svc.CallOnPremise` unchecked are how SAP ends up with Short Dumps and how you end up debugging across three layers at 23:00.
+> **Do not fool around with raw bytes.** The raw-forward pattern — reading `c.Request.Body` and piping it straight into `svc.CallOnPremise` - is what `svc.ProxyHandler` does and why the template does not wire that route by default (see previous sub-section). For every endpoint you write: unmarshal into a typed struct, validate via struct tags (or an explicit `Validate()`), marshal the ABAP-side shape yourself, and — if SAP returns XML — parse it back into Go structs and emit JSON, the way `examples/adtcheckrun/` and `examples/adtdiscovery/` do. `[]byte` and `json.RawMessage` that travel to `svc.CallOnPremise` unchecked are how SAP ends up with Short Dumps and how you end up debugging across three layers at 23:00.
 
 Two things to apply the same discipline to, that are easy to forget:
 
