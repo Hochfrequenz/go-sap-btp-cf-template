@@ -2,7 +2,8 @@
 
 > [!WARNING]
 > Dieses Vorgehen wurde für einen Hochfrequenz Sub-Account in der BTP getestet.
-> Es ist **prinzipiell** übertragbar aber einzelne Werte können so nicht wiederverwendet werden.
+> Dieser Text ist mehr ein Protokoll, was zum Deployment getan wurde und eher weniger eine kompakte Anleitung.
+> Das Vorgehen ist **prinzipiell** übertragbar aber einzelne Werte können so nicht wiederverwendet werden.
 
 Dieses Dokument protokolliert chronologisch, was beim ersten realen Deploy des MWE nach SAP BTP Cloud Foundry getan wurde — inklusive Klicks im Cockpit, ausgeführter Shell-Kommandos und getroffener Entscheidungen.
 Ziel: Ein:e andere:r Entwickler:in kann den Ablauf auf einer ähnlichen Umgebung (Windows 11, neues BTP-Konto) eins-zu-eins nachvollziehen.
