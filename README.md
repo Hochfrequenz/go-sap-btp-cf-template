@@ -1,6 +1,7 @@
 # go-sap-btp-cf-template
 
-Go starter template for building webservices on **SAP BTP Cloud Foundry** that talk to on-premise SAP systems. Fork it, fill in one `config.yml`, `cf push` — you get a production-grade Go backend with **XSUAA authentication**, **Destination + Connectivity + Cloud Connector** wiring, and a **transparent CSRF handshake** on writes, all behind a single `svc.CallOnPremise(…)` call in your handler code.
+Go starter template for building webservices on **SAP BTP Cloud Foundry** that talk to on-premise SAP systems.
+Fork it, fill in one `config.yml`, `cf push` and you get a production-grade Go backend with **XSUAA authentication**, **Destination + Connectivity + Cloud Connector** wiring, and a **transparent CSRF handshake** on writes, all behind a single `svc.CallOnPremise(…)` call in your handler code.
 
 ### What's in the box
 
@@ -36,7 +37,7 @@ flowchart LR
     style CC fill:#e9ecef,stroke:#6c757d,stroke-dasharray:5 5,color:#495057
 ```
 
-> **Signpost.** First time here?
+> 🪧 First time here?
 > - Just forked and need to configure → [Using this repo as a template](#using-this-repo-as-a-template)
 > - Building a new endpoint on an existing fork → [Adding your service](#adding-your-service--the-80--case)
 > - Deploying for the first time → [Deployment](#deployment)
@@ -54,7 +55,6 @@ flowchart LR
 8. [What this MWE deliberately does *not* do](#what-this-mwe-deliberately-does-not-do)
 9. [How it works under the hood](#how-it-works-under-the-hood)
 10. [References](#references)
-11. [License](#license)
 
 ## Repository layout
 
@@ -82,9 +82,10 @@ vars.example.yml            template for cf push --vars-file vars.yml
 
 ## Using this repo as a template
 
-All per-deployment string values (app name, Go module path, CF subaccount coordinates, service instance names, **example-handler destination name**) live in a single `config.yml` at the repo root. `cmd/apply-config` is a small Go tool that reads that file, type-checks every field, and rewrites the rest of the tree from it — `go.mod`, every Go import, `manifest.yml`, `xs-security.json`, `vars.example.yml`, `web/package.json`, `.github/workflows/deploy.yml`, and the destination-name literal across `examples/**/*.go`.
+All per-deployment string values (app name, Go module path, CF subaccount coordinates, service instance names, **example-handler destination name**) live in a single [`config.yml`](config.yml) at the repo root.
+`cmd/apply-config` is a small Go tool that reads that file, type-checks every field, and rewrites the rest of the tree from it - `go.mod`, every Go import, `manifest.yml`, `xs-security.json`, `vars.example.yml`, `web/package.json`, `.github/workflows/deploy.yml`, and the destination-name literal across `examples/**/*.go`.
 
-> **Using AI assistance to navigate this template?** Start with [`CLAUDE.md`](CLAUDE.md) at the repo root — rules + pointers an AI assistant reads on every prompt to stay on-rails (handler placement, forbidden patterns, where things live). The README stays the human-facing reference; `CLAUDE.md` is its AI-facing companion.
+> **Using AI assistance to navigate this template?** Start with [`CLAUDE.md`](CLAUDE.md) at the repo root - rules + pointers an AI assistant reads on every prompt to stay on-rails (handler placement, forbidden patterns, where things live). The README stays the human-facing reference; `CLAUDE.md` is its AI-facing companion.
 
 Recommended flow after forking:
 
@@ -99,29 +100,29 @@ go test ./...                                 # sanity check
 git add -A && git commit -m "chore: configure fork"
 ```
 
-Properties of the tool:
+### Not rewritten - manual fork chores
 
-- **Typed.** `config.yml` is parsed into a Go struct with aggregated validation — all problems reported in one run, same pattern as `internal/btp/env.go`.
-- **Idempotent.** Running twice with an unchanged `config.yml` is a no-op. CI can enforce that with `go run ./cmd/apply-config --check` (exit 1 if the tree drifts from the config).
-- **Fails loudly.** Each file rewriter asserts its expected shape; a drifted target returns a clear error instead of silently producing garbage.
-- **Zero internal dependencies.** The tool imports nothing from `internal/`, so it keeps working even while it's rewriting import paths.
+The documentation was written using the Hochfrequenz subscription on SAP BTP.
+You'll find the Hochfrequenz company and account name a few times in the docs.
 
-### Not rewritten — manual fork chores
-
-`apply-config` does not touch HF-specific values that are upstream attribution, per-fork ownership, or HF-flavoured prose — those are intentional and a fork-author should review (and likely replace) them deliberately. The list below is what survives `apply-config` on a freshly-forked tree, with the `rg` command to locate each:
+`apply-config` does not touch company-specific values that are upstream attribution, per-fork ownership, or Hochfreqenz-flavoured prose - those are intentional and a fork-author should review (and likely replace) them deliberately.
+The list below is what survives `apply-config` on a freshly-forked tree, with the `rg` command to locate each:
 
 | Item | Where | How to find | Why not rewritten |
 | --- | --- | --- | --- |
 | README prose | `README.md` | reading | HF-flavoured by intent; documents the running deploy. Strip or replace as your fork sees fit. |
-| Walkthrough | `docs/btp-deploy-walkthrough.de.md` | reading | German + chronological deploy diary; HF-specific by design. |
+| Walkthrough | `docs/btp-deploy-walkthrough.de.md` | reading | German + chronological deploy diary; Hochfrequenz-specific by design. |
 | `LICENSE` copyright line | `LICENSE` | `rg Hochfrequenz LICENSE` | Upstream attribution; usually keep + add your own copyright above. |
-| `CODEOWNERS` reviewer team | `.github/CODEOWNERS` | `rg Hochfrequenz .github/CODEOWNERS` | Per-fork ownership; replace `@Hochfrequenz/go-review-team` with your team. |
 
-`.github/workflows/template-guards.yml` runs each documented `rg` pattern against the upstream tree on every PR — if a row's pattern stops matching anything on this repo, the gate fails. That surfaces bit-rot (item removed without doc update) before the list quietly goes stale; forks that strip an item legitimately can drop the row from the table or relax the gate.
+`.github/workflows/template-guards.yml` runs each documented `rg` pattern against the upstream tree on every PR - if a row's pattern stops matching anything on this repo, the gate fails. That surfaces bit-rot (item removed without doc update) before the list quietly goes stale; forks that strip an item legitimately can drop the row from the table or relax the gate.
 
-## Adding your service — the 80 % case
+## Adding your service: the 80% case
 
-Building a new value-adding service on top of on-prem SAP is **two anchors**: an ABAP endpoint on the SAP side, and a Gin handler on the Go side. The BTP plumbing between them (XSUAA login, Destination lookup, Cloud Connector tunnel, Basic Auth forwarding) is already wired up and you do not need to touch it.
+Building a new value-adding service on top of on-prem SAP is **two anchors**:
+1. an ABAP endpoint on the SAP side
+2. and a Gin handler on the Go side.
+
+The BTP plumbing between them (XSUAA login, Destination lookup, Cloud Connector tunnel, Basic Auth forwarding) is already wired up and you do not need to touch it.
 
 ```mermaid
 flowchart LR
@@ -139,9 +140,10 @@ Green and yellow boxes are where you work; the dashed grey box is plumbing that 
 
 ---
 
-### Anchor 1 — in the SAP system: the ABAP endpoint
+### Anchor 1: in the SAP system: the ABAP endpoint
 
-Your ABAP developer (or you, with a pair of hands on SE80 / ADT) builds the endpoint. Anything reachable by an ICF service node works — pick the framework that fits the job:
+Your ABAP developer (or you, with a pair of hands on SE80 / ADT) builds the endpoint.
+Anything reachable by an ICF service node works.
 
 | ABAP framework | URL prefix | Good for |
 | --- | --- | --- |
@@ -162,7 +164,7 @@ Three things to pin down in SAP terms before you write Go code:
 
 ---
 
-### Anchor 2 — in this repo: the Gin handler
+### Anchor 2: in this repo: the Gin handler
 
 A handler is four mechanical steps:
 
@@ -171,14 +173,15 @@ A handler is four mechanical steps:
 3. **Call on-prem** via `svc.CallOnPremise` — one function call runs the whole three-leg dance.
 4. **Shape the response** back to the caller (stream, transform, wrap, whatever your product wants).
 
-**Step 1 — register the route.**
+#### Step 1: register the route.
 
 ```go
 // In buildRouter, next to api.GET("/me", ...):
 api.POST("/invoice-sync", invoiceSyncHandler(svc))
 ```
 
-**Steps 2–4 — the handler.** The full, typed, compileable example lives at [**`examples/invoicesync/handler.go`**](examples/invoicesync/handler.go) — read that file for the complete pattern (request type with validation tags, `svc.CallOnPremise` call, response streaming).
+#### Steps 2–4: the handler.
+The full, typed, compileable example lives at [**`examples/invoicesync/handler.go`**](examples/invoicesync/handler.go) - read that file for the complete pattern (request type with validation tags, `svc.CallOnPremise` call, response streaming).
 
 Here's a mental model-size sketch of what the file contains:
 
@@ -220,7 +223,9 @@ func Handler(svc btp.OnPremCaller) gin.HandlerFunc {
 }
 ```
 
-The template does **not** ship a transparent-proxy route by default — strict typing at the Gin boundary needs a fixed endpoint set, and the security story is much better when every path is explicit. If a fork genuinely wants a catch-all pass-through, `svc.ProxyHandler` is still a method on `*btp.Service`; wire it yourself, gate it with `btp.RequireScope("...User")`, and be deliberate about which users can reach it. **For anything that writes state on the SAP side, read the next sub-section first** — validation-before-SAP is how you keep on-prem Short Dumps out of your life.
+The template does **not** ship a transparent-proxy route by default - strict typing at the Gin boundary needs a fixed endpoint set, and the security story is much better when every path is explicit.
+If a fork genuinely wants a catch-all pass-through, `svc.ProxyHandler` is still a method on `*btp.Service`; wire it yourself, gate it with `btp.RequireScope("...User")`, and be deliberate about which users can reach it.
+**For anything that writes state on the SAP side, read the next sub-section first** - validation-before-SAP is how you keep on-prem Short Dumps out of your life.
 
 Unit-test the handler with the fixtures in `internal/btp/service_test.go`; they stand up stubs that respond like the real XSUAA / Destination / CC stack, so you can assert request shape and response translation without deploying.
 
@@ -228,11 +233,15 @@ Unit-test the handler with the fixtures in `internal/btp/service_test.go`; they 
 
 ### Validate and sanitise at the Gin layer, not in SAP
 
-Sanitising a bad payload in ABAP is painful — data-type shaping is verbose, exception handling is heavy, and you cannot easily test an error path without a full transport-request round-trip. The same sanitising in Go is a struct tag and one line. Put the discipline as far to the left as possible.
+Sanitising a bad payload in ABAP is painful - data-type shaping is verbose, exception handling is heavy, and you cannot easily test an error path without a full transport-request round-trip.
+The same sanitising in Go is a struct tag and one line. Put the discipline as far to the left as possible.
 
-> **Rule of thumb.** Every byte that reaches `svc.CallOnPremise` has already passed type checks, required-field checks, format and range checks, and enum-value checks in the Gin handler. If a request can fail validation, it fails here — with a `400` and a clear message — not on the SAP side with a Short Dump.
+> [!TIP]
+> **Rule of thumb.** Every byte that reaches `svc.CallOnPremise` has already passed type checks, required-field checks, format and range checks, and enum-value checks in the Gin handler.
+> If a request can fail validation, it fails here — with a `400` and a clear message - not on the SAP side with a Short Dump.
+> Make use of [Gins integrated validation with validator tags](https://gin-gonic.com/en/docs/binding/binding-and-validation/) on the model structs. 
 
-The request type in [`examples/invoicesync/handler.go`](examples/invoicesync/handler.go) is what a validated body looks like in practice — struct tags do the heavy lifting:
+The request type in [`examples/invoicesync/handler.go`](examples/invoicesync/handler.go) is what a validated body looks like in practice; struct tags do the heavy lifting:
 
 ```go
 type Request struct {
@@ -244,9 +253,13 @@ type Request struct {
 }
 ```
 
-Gin's binding uses [`go-playground/validator`](https://github.com/go-playground/validator); the tag vocabulary covers required / length / regex / enum / cross-field rules (`required_with`, `gtfield`, etc.). For shape-checks beyond the tag language, add a `Validate()` method on the request type and call it right after `ShouldBindJSON`.
+Gin's binding uses [`go-playground/validator`](https://github.com/go-playground/validator); the tag vocabulary covers required / length / regex / enum / cross-field rules (`required_with`, `gtfield`, etc.).
+For shape-checks beyond the tag language, add a `Validate()` method on the request type and call it right after `ShouldBindJSON`.
 
-> **Do not fool around with raw bytes.** The raw-forward pattern — reading `c.Request.Body` and piping it straight into `svc.CallOnPremise` — is what `svc.ProxyHandler` does and why the template does not wire that route by default (see previous sub-section). For every endpoint you write: unmarshal into a typed struct, validate via struct tags (or an explicit `Validate()`), marshal the ABAP-side shape yourself, and — if SAP returns XML — parse it back into Go structs and emit JSON, the way `examples/adtcheckrun/` and `examples/adtdiscovery/` do. `[]byte` and `json.RawMessage` that travel to `svc.CallOnPremise` unchecked are how SAP ends up with Short Dumps and how you end up debugging across three layers at 23:00.
+> [!TIP]
+> **Do not fool around with raw byte slices.**
+> The raw-forward pattern - reading `c.Request.Body` and piping it straight into `svc.CallOnPremise` - is what `svc.ProxyHandler` does and why the template does not wire that route by default (see previous sub-section).
+> For every endpoint you write: unmarshal into a typed struct using the [model binding which Gin provides you](https://gin-gonic.com/en/docs/binding/binding-and-validation/), validate via struct tags (or an explicit `Validate()`), marshal the ABAP-side shape yourself, and - if SAP returns XML - parse it back into Go structs and emit JSON, the way `examples/adtcheckrun/` and `examples/adtdiscovery/` do. `[]byte` and `json.RawMessage` that travel to `svc.CallOnPremise` unchecked are how SAP ends up with Short Dumps and how you end up debugging across three layers at 23:00.
 
 Two things to apply the same discipline to, that are easy to forget:
 
@@ -255,7 +268,9 @@ Two things to apply the same discipline to, that are easy to forget:
 
 #### Body-size cap
 
-`cmd/server/main.go` installs `btp.MaxBodySize(btp.DefaultMaxBodyBytes)` (1 MiB) globally. Any request whose `Content-Length` announces more — or that streams more under chunked / lying-Content-Length — is rejected with a typed `413` envelope (`code: "request_too_large"`) before reaching the Gin binder. The cap protects the app's 128 MiB CF memory quota from a single oversized POST.
+`cmd/server/main.go` installs `btp.MaxBodySize(btp.DefaultMaxBodyBytes)` (1 MiB) globally.
+Any request whose `Content-Length` announces more, or that streams more under chunked / lying-Content-Length, is rejected with a typed `413` envelope (`code: "request_too_large"`) before reaching the Gin binder.
+The cap protects the app's 128 MiB CF memory quota from a single oversized POST.
 
 For a route that legitimately needs more (large-file import, batch upload), install a per-route override before the handler:
 
@@ -265,13 +280,15 @@ api.POST("/large-import",
     importHandler)
 ```
 
-The per-route middleware stacks before the handler. If the global cap is in force, it still rejects on the fast path because it ran first — so a per-route override is meaningful only when its limit is **smaller** than the global. To genuinely lift the cap on one route, structure that route under its own router group that does **not** include the global `MaxBodySize`, or raise the global value to the highest legitimate body any route in the app needs.
+The per-route middleware stacks before the handler.
+If the global cap is in force, it still rejects on the fast path because it ran first — so a per-route override is meaningful only when its limit is **smaller** than the global.
+To genuinely lift the cap on one route, structure that route under its own router group that does **not** include the global `MaxBodySize`, or raise the global value to the highest legitimate body any route in the app needs.
 
 ---
 
 ### Return errors with a stable envelope
 
-Raw `c.JSON(..., gin.H{"error": err.Error()})` is tempting and wrong — it leaks jwt/keyfunc internals, SAP response bodies, and stack-flavoured Go error text into the response the client reads.
+Raw `c.JSON(..., gin.H{"error": err.Error()})` is tempting and probably wrong because it leaks jwt/keyfunc internals, SAP response bodies, and stack-flavoured Go error text into the response the client reads.
 The template ships one helper (`btp.AbortError`) and one envelope shape, and every handler in the repo uses them:
 
 ```go
@@ -281,16 +298,19 @@ btp.AbortError(c, http.StatusBadGateway, btp.CodeUpstreamUnreachable,
 // { "error": { "code": "upstream_unreachable", "message": "on-premise call failed", "request_id": "…" } }
 ```
 
-The split: the **user-facing message** is what the client sees — keep it stable and generic, clients switch on `code`, not on `message`. The **underlying `err`** goes to `slog.ErrorContext` server-side with the status, code, and request ID so an operator can grep by request ID and see the real cause.
+The split: the **user-facing message** is what the client sees.
+Keep it stable and generic, clients switch on `code`, not on `message`.
+The **underlying `err`** goes to `slog.ErrorContext` server-side with the status, code, and request ID so an operator can grep by request ID and see the real cause.
 
-> **Two helpers turn the user-facing message into something diagnostic without leaking err details.** Use them instead of a hand-written constant string when calling `svc.CallOnPremise` / `svc.CallOnPremiseMutating`:
+> **Two helpers turn the user-facing message into something diagnostic without leaking err details.**
+> Use them instead of a hand-written constant string when calling `svc.CallOnPremise` / `svc.CallOnPremiseMutating`:
 >
 > - **err path** — `kind, detail := btp.ClassifyOnPremError(err)` returns a typed `OnPremFailureKind` (`destination_not_found`, `response_too_large`, `timeout`, `canceled`, `transport_error`) plus a stable, client-safe detail string. Pass `detail` as the user message; log `kind` server-side so operators can filter / aggregate. See `examples/adtdiscovery/handler.go` for the canonical pattern.
 > - **non-2xx-from-SAP path** — `btp.OnPremNon2xxDetail(resp.StatusCode)` returns `"on-premise system returned HTTP <status>"`. Surfaces the SAP status to the client without leaking the response body. Used by both `examples/adtdiscovery/handler.go` (huma) and `examples/adtcheckrun/handler.go` (gin/`AbortError`).
 >
 > The wire format of both helpers is part of the public API surface (see `internal/btp/doc.go`); changes require a CHANGELOG entry. Forks pinning the old constant strings in alert rules need to update.
 
-One exception where it's safe (and useful) to pass `err.Error()` as the user message: `go-playground/validator` errors from `c.ShouldBindJSON`. Those messages describe struct-tag violations that the client caused and needs to fix — surfacing them is the whole point.
+One exception where it's safe (and useful) to pass `err.Error()` as the user message: `go-playground/validator` errors from `c.ShouldBindJSON`. Those messages describe struct-tag violations that the client caused and needs to fix.
 
 Canonical codes live in [`internal/btp/httperr.go`](internal/btp/httperr.go) (`CodeInvalidRequest`, `CodeUnauthorized`, `CodeForbidden`, `CodeNotFound`, `CodeUpstreamUnreachable`, `CodeInternal`); declare your own `ErrorCode` constants if you need more. Failure-classification helpers live in [`internal/btp/classifier.go`](internal/btp/classifier.go) and [`internal/btp/non2xx_detail.go`](internal/btp/non2xx_detail.go).
 
@@ -298,7 +318,8 @@ Canonical codes live in [`internal/btp/httperr.go`](internal/btp/httperr.go) (`C
 
 ### Guard routes with scopes and correlate logs with a request ID
 
-The JWT middleware only checks signature, audience, and expiry — it does **not** enforce scopes, because this MWE ships no scope-gated route.
+The JWT middleware only checks signature, audience, and expiry.
+It does **not** enforce scopes, because this MWE ships no scope-gated route.
 The moment you add one, use `btp.RequireScope(...)` rather than reading the `scope` claim by hand: the helper does exact-match (no `strings.Contains` trap where `Unauthorized-User` would match `User`) and produces the same 403 envelope as every other error in the repo.
 
 ```go
@@ -327,9 +348,10 @@ The split exists because putting `user_name` into the access log looks convenien
 
 ---
 
-### Calling SAP with a POST — the CSRF case
+### Calling SAP with a POST / CSRF
 
-SAP ICF nodes enforce an [X-CSRF-Token handshake](https://help.sap.com/docs/btp/sap-business-technology-platform/cross-site-request-forgery-protection-3ae1ed51.html) on every write (POST / PUT / DELETE / PATCH): you fetch a token with a GET first, attach it plus the session cookies SAP sets alongside it on the mutating call, and re-fetch once on `403 X-CSRF-Token: Required`. Getting that dance wrong is where most "my first ADT POST returns 403" reports come from.
+SAP ICF nodes enforce an [X-CSRF-Token handshake](https://help.sap.com/docs/btp/sap-business-technology-platform/cross-site-request-forgery-protection-3ae1ed51.html) on every write (POST / PUT / DELETE / PATCH): you fetch a token with a GET first, attach it plus the session cookies SAP sets alongside it on the mutating call, and re-fetch once on `403 X-CSRF-Token: Required`.
+Getting that dance wrong will lead to a HTTP 403 response from you SAP.
 
 The Service runs it for you via a second method:
 
@@ -353,7 +375,9 @@ What `CallOnPremiseMutating` does behind the scenes:
 
 The request body is buffered up-front so the retry can re-read it. For bodies too large to buffer, write your own handshake on top of `CallOnPremise`.
 
-For handler tests, depend on the narrow `btp.OnPremMutator` interface (same shape as `OnPremCaller`, single method `CallOnPremiseMutating`) and substitute a one-method fake — the CSRF logic is the Service's concern, already tested in `internal/btp/service_csrf_test.go`. Handlers that mix reads and writes declare a composite interface at the usage site:
+For handler tests, depend on the narrow `btp.OnPremMutator` interface (same shape as `OnPremCaller`, single method `CallOnPremiseMutating`) and substitute a one-method fake. 
+The CSRF logic is the service's concern, already tested in `internal/btp/service_csrf_test.go`.
+Handlers that mix reads and writes declare a composite interface at the usage site:
 
 ```go
 type MyClient interface {
@@ -362,17 +386,18 @@ type MyClient interface {
 }
 ```
 
-A complete example with a handler test lives in [`examples/adtcheckrun/`](examples/adtcheckrun/) — ADT syntax-check POST, typed request body with validator tags, and a `fakeMutator` test double.
+A complete example with a handler test lives in [`examples/adtcheckrun/`](examples/adtcheckrun/): ADT syntax-check POST, typed request body with validator tags, and a `fakeMutator` test double.
 
 ---
 
-### Logging — two levels, no warnings
+### Logging in two levels
 
-The whole codebase runs on Dave Cheney's [two-levels discipline](https://dave.cheney.net/2015/11/05/lets-talk-about-logging). If you're coming from Java or ABAP, the rules are probably tighter than you're used to — deliberately.
+The whole codebase runs on Dave Cheney's [two-levels discipline](https://dave.cheney.net/2015/11/05/lets-talk-about-logging).
+If you're coming from Java or ABAP, the rules are probably tighter than you're used to.
 
-1. **Only two levels matter.** `INFO` is useful operational output. `DEBUG` is useful to a developer chasing a specific problem and is off by default in production. `ERROR` exists only as an output-filter knob (`LOG_LEVEL=error` for low-noise deployments), not as a level you ever *write* to — errors are returned, not logged (see rule 2).
+1. **Only two levels matter.** `INFO` is useful operational output. `DEBUG` is useful to a developer chasing a specific problem and is off by default in production. `ERROR` exists only as an output-filter knob (`LOG_LEVEL=error` for low-noise deployments), not as a level you ever *write* to - errors are returned, not logged (see rule 2).
 2. **Errors are not a log level.** An error is a return value. Handlers return it; only the boundary that cannot return any further (the HTTP response, or `main`) logs it. `btp.AbortError` is that boundary for HTTP responses — it writes the envelope and logs the underlying Go error once, server-side, with the request ID.
-3. **`WARN` doesn't exist in this repo.** If it's serious, handle it as an error. If it isn't, log `INFO`. "Something odd happened but I'm going to continue" is where warnings accumulate that nobody ever acts on — don't write those.
+3. **`WARN` doesn't exist in this repo.** If it's serious, handle it as an error. If it isn't, log `INFO`. "Something odd happened but I'm going to continue" is where warnings accumulate that nobody ever acts on - don't write those.
 4. **One access-log line per request.** Already wired in `cmd/server/main.go`'s `requestLog`; don't add "entering handler" / "leaving handler" lines on top. If a handler needs business-event context (e.g. `invoicesync` logs `user + company_code`), emit exactly one line per business event, not per middleware stage.
 
 Enforcement: `.github/workflows/template-guards.yml` greps the tree for `.Warn(` and fails CI on any hit. A new PR that reintroduces warnings is blocked at merge; the error message points back to this section.
@@ -383,7 +408,8 @@ Local debugging: set `LOG_LEVEL=debug` before running the server to see `DEBUG`-
 
 ### OpenAPI 3.1 + Swagger UI via huma
 
-The router mounts a [huma v2](https://huma.rocks/) API on top of the same `api` group, so every handler registered through huma appears in an auto-generated OpenAPI 3.1 spec — and a Swagger UI rendered from it — with **no comments, no annotations, no manual spec to maintain**:
+The router mounts a [huma v2](https://huma.rocks/) API on top of the same `api` group, so every handler registered through huma appears in an auto-generated OpenAPI 3.1 spec - and a Swagger UI rendered from it - with **no comments, no annotations, no manual spec to maintain**.
+This means no frickling with neither easy-to-get-wrong endpoint annotations nor badly auto-generated code from mediocre API first / code generation tools.
 
 | Path                  | Served                                      |
 | --------------------- | ------------------------------------------- |
@@ -393,9 +419,11 @@ The router mounts a [huma v2](https://huma.rocks/) API on top of the same `api` 
 | `/api/docs`           | Swagger UI                                  |
 | `/api/schemas/*`      | Referenced JSON Schemas                     |
 
-These sit under `/api`, so the JWT middleware applies — the spec describes a JWT-gated API; reading it requires the same auth. Forks that want public docs can move the huma mount to the engine root in `cmd/server/main.go`'s `buildRouter`.
+These sit under `/api`, so the JWT middleware applies — the spec describes a JWT-gated API; reading it requires the same auth.
+Forks that want public docs can move the huma mount to the engine root in `cmd/server/main.go`'s `buildRouter`.
 
-A huma-style handler looks like this — `examples/adtdiscovery/handler.go` is the canonical example in this repo:
+A huma-style handler looks like this. 
+`examples/adtdiscovery/handler.go` is the canonical example in this repo:
 
 ```go
 type DiscoveryInput struct{}                      // GET, no input
@@ -418,9 +446,12 @@ func Handler(svc btp.OnPremCaller) func(context.Context, *DiscoveryInput) (*Disc
 }
 ```
 
-The OpenAPI operation, request/response schemas, and validation rules are derived from the function signature and the embedded structs' JSON tags. Add a field with `validate:"required,oneof=EUR USD GBP"` and the spec carries that constraint automatically.
+The OpenAPI operation, request/response schemas, and validation rules are derived from the function signature and the embedded structs' JSON tags.
+Add a field with `validate:"required,oneof=EUR USD GBP"` and the spec carries that constraint automatically.
 
-**Two handler styles ship in this repo today.** `adtdiscovery` is huma-style (above). `adtcheckrun` and `invoicesync` stay gin-style (`func(c *gin.Context)`) — they read `jwtClaims` from the gin context map for their audit log, and surfacing that to a `context.Context`-only huma handler needs a small adapter tracked as follow-up. Both can coexist on the same router group; pick one per handler — never mix the two styles in a single endpoint.
+**Two handler styles ship in this repo today.** `adtdiscovery` is huma-style (above).
+`adtcheckrun` and `invoicesync` stay gin-style (`func(c *gin.Context)`) - they read `jwtClaims` from the gin context map for their audit log, and surfacing that to a `context.Context`-only huma handler needs a small adapter tracked as follow-up.
+Both can coexist on the same router group; pick one per handler — never mix the two styles in a single endpoint.
 
 | Need | Pick | Why |
 | --- | --- | --- |
@@ -433,9 +464,11 @@ The OpenAPI operation, request/response schemas, and validation rules are derive
 
 ### Test your handler without touching SAP
 
-> **Coming from ABAP?** Unit-testing in Go is nothing like testing in the SAP stack, and this is good news. A Go test compiles and runs in well under a second — no transport request round-trip, no test user to maintain, no colleague's session to lock, no data to clean up in table `BKPF` afterwards. The red-green-refactor loop that never really worked in ABAP works here because the feedback is cheap. If that sounds unfamiliar, the three tests in this sub-section are a good first encounter: copy them, break something in the handler, watch the test fail in 0.3 s, fix it, watch it pass. That's the whole loop.
+> **Coming from ABAP?** Unit-testing in Go is nothing like testing in the SAP stack, and this is good news. A Go test compiles and runs in well under a second — no transport request round-trip, no test user to maintain, no colleague's session to lock, no data to clean up in table `BKPF` afterwards.
+> The red-green-refactor loop that never really worked in ABAP works here because the feedback is cheap. If that sounds unfamiliar, the three tests in this sub-section are a good first encounter: copy them, break something in the handler, watch the test fail in 0.3 s, fix it, watch it pass.
 
-Integration-testing against a real on-prem SAP is a pain: transport requests, user lockouts, Short Dumps on edge cases, an ABAP stack that boots in minutes. The template is designed so you almost never have to. Every handler depends on the narrow `btp.OnPremCaller` interface rather than the concrete `*btp.Service`:
+Integration-testing against a real on-prem SAP is a pain: transport requests, user lockouts, Short Dumps on edge cases, an ABAP stack that boots in minutes.
+The template is designed so you almost never have to. Every handler depends on the narrow `btp.OnPremCaller` interface rather than the concrete `*btp.Service`:
 
 ```go
 // internal/btp/service.go — the contract handlers should depend on:
@@ -445,9 +478,12 @@ type OnPremCaller interface {
 }
 ```
 
-The concrete `Service` type satisfies it in production. Tests substitute a one-method fake that records the request the handler produced and returns a canned response — no XSUAA, no Destination lookup, no Cloud Connector tunnel, no ABAP.
+The concrete `Service` type satisfies it in production.
+Tests substitute a one-method fake that records the request the handler produced and returns a canned response — no XSUAA, no Destination lookup, no Cloud Connector tunnel, no ABAP.
 
-> **Library-intent surface.** The set of identifiers handlers are allowed to lean on lives at [`internal/btp/doc.go`](internal/btp/doc.go). Anything else in the package is template-internal and may move without notice. A CI gate blocks PRs that add a dependency on the concrete `Service` type from outside `cmd/server/main.go`.
+> **Library-intent surface.** The set of identifiers handlers are allowed to lean on lives at [`internal/btp/doc.go`](internal/btp/doc.go).
+> Anything else in the package is template-internal and may move without notice.
+> A CI gate blocks PRs that add a dependency on the concrete `Service` type from outside `cmd/server/main.go`.
 
 The canonical test lives next to the example handler: [`examples/invoicesync/handler_test.go`](examples/invoicesync/handler_test.go). Its shape:
 
@@ -486,7 +522,9 @@ func Test_Handler_MarshalsRequestIntoABAPShape(t *testing.T) {
 }
 ```
 
-> **Stay typed all the way through.** The test decodes `fake.gotBody` into a **named struct** that describes the ABAP-side shape (BUKRS / WAERS / …) — not into `map[string]any`. Every place where JSON crosses a boundary in this template — caller → handler, handler → SAP, SAP response → caller — is asserted through typed Go. A failed field name or a wrong type fails at compile time or at a typed unmarshal, never silently as "oh, that key was missing from the map".
+> **Stay typed all the way through.** The test decodes `fake.gotBody` into a **named struct** that describes the ABAP-side shape (BUKRS / WAERS / …) - not into `map[string]any`.
+> Every place where JSON crosses a boundary in this template - caller → handler, handler → SAP, SAP response → caller - is asserted through typed Go.
+> A failed field name or a wrong type fails at compile time or at a typed unmarshal, never silently as "oh, that key was missing from the map".
 
 The full test file shows three cases worth copying into your own handler tests:
 
@@ -494,13 +532,15 @@ The full test file shows three cases worth copying into your own handler tests:
 2. **Validation fails before SAP** — an invalid payload must 400 **without ever calling `CallOnPremise`** (the test asserts the fake was not invoked).
 3. **On-prem error surfaces as 502** — when the fake returns an error, the handler responds 502, not 500.
 
-If you need to exercise the three-leg token dance end-to-end (destination lookup + XSUAA client_credentials + Connectivity token + Cloud Connector proxy), the heavier `httptest.NewServer` pattern is in [`internal/btp/service_test.go`](internal/btp/service_test.go). For everyday handler work the interface-plus-fake pattern above is faster and more targeted.
+If you need to exercise the three-leg token dance end-to-end (destination lookup + XSUAA client_credentials + Connectivity token + Cloud Connector proxy), the heavier `httptest.NewServer` pattern is in [`internal/btp/service_test.go`](internal/btp/service_test.go).
+For everyday handler work the interface-plus-fake pattern above is faster and more targeted.
 
 ---
 
 ### What you do NOT need to understand
 
-The middleware and service code hide most of the BTP specifics. For the 80 % case you can assume each of the following without looking:
+The middleware and service code hide most of the BTP specifics.
+For the 80 % case you can assume each of the following without looking:
 
 | Concern | Handled by | Assume that |
 | --- | --- | --- |
@@ -528,7 +568,8 @@ Before any `cf push` there are **three things a human has to do** in addition to
 
 #### 1. A Cloud Connector exposing the on-prem endpoint
 
-A SAP Cloud Connector must be installed on the on-prem network, paired with your BTP subaccount, and must expose the internal SAP virtual host/port you want to reach. See [Install the Cloud Connector](https://help.sap.com/docs/connectivity/sap-btp-connectivity-cf/installation) and [Configure Access Control](https://help.sap.com/docs/connectivity/sap-btp-connectivity-cf/configure-access-control-http). Without this, the three-leg dance succeeds up to the final hop and then times out against a host that cannot be reached.
+A SAP Cloud Connector must be installed on the on-prem network, paired with your BTP subaccount, and must expose the internal SAP virtual host/port you want to reach. See [Install the Cloud Connector](https://help.sap.com/docs/connectivity/sap-btp-connectivity-cf/installation) and [Configure Access Control](https://help.sap.com/docs/connectivity/sap-btp-connectivity-cf/configure-access-control-http).
+Without this, the three-leg dance succeeds up to the final hop and then times out against a host that cannot be reached.
 
 If your subaccount has more than one Cloud Connector, note each one's **Location ID** — you will set it on the Destination below as `CloudConnectorLocationId`.
 
@@ -659,7 +700,9 @@ go build -o bin/server ./cmd/server
 
 ### 5. Post-deploy manual steps (required for the app to work)
 
-Even after a green `cf push`, three things still need to be done by a human in the BTP cockpit before requests succeed. Each is a one-time chore per deploy — expand the step you're on:
+Even after a green `cf push`, three things still need to be done by a human in the BTP cockpit before requests succeed.
+Each is a one-time chore per deploy.
+Expand the step you're on:
 
 <details>
 <summary>5a. Update XSUAA redirect URIs — makes OAuth login not bounce with "redirect URI mismatch"</summary>
@@ -845,7 +888,8 @@ go run ./cmd/server
 
 </details>
 
-A broken `VCAP_SERVICES` payload produces a single error listing **all** problems at once — modeled on [Hochfrequenz/sap-mcp-config](https://github.com/Hochfrequenz/sap-mcp-config). No more "fix one field, redeploy, find the next missing field."
+A broken `VCAP_SERVICES` payload produces a single error listing **all** problems at once.
+No more "fix one field, redeploy, find the next missing field."
 
 ## Extension points
 
@@ -866,13 +910,15 @@ svc.Authenticators().Register(myAuth0Authenticator{})
 svc.Authenticators().Register(myOAuth2ClientCredsAuthenticator{})
 ```
 
-Shipped out of the box: `AuthNone` and `AuthBasic`, plus a rejecting fallback so unknown auth types fail loudly rather than travelling unauthenticated. The authenticator registry is where Auth0/SSO/`OAuth2ClientCredentials`/`PrincipalPropagation` plug in.
+Shipped out of the box: `AuthNone` and `AuthBasic`, plus a rejecting fallback so unknown auth types fail loudly rather than travelling unauthenticated.
+The authenticator registry is where Auth0/SSO/`OAuth2ClientCredentials`/`PrincipalPropagation` plug in.
 
 For Principal Propagation specifically: the approuter-forwarded user JWT is stashed in the request context under `btp.ForwardedUserTokenKey{}` — a PP authenticator reads it from there and sets `SAP-Connectivity-Authentication`.
 
 ### Timeouts — three layers, two of them ours
 
-A request that fans out to a legacy on-prem SAP system can sit on the wire for minutes. Three different timeouts gate it; two are set by this template, the third is deployment-managed.
+A request that fans out to a legacy on-prem SAP system can sit on the wire for minutes.
+Three different timeouts gate it; two are set by this template, the third is deployment-managed.
 
 **HTTP server (`cmd/server/main.go`):**
 
@@ -889,9 +935,12 @@ A request that fans out to a legacy on-prem SAP system can sit on the wire for m
 | -------------------------- | ------- | -------------------------------------------------------------------- |
 | `DefaultOnPremiseTimeout`  | 600 s   | Per-call timeout on `*btp.Service`'s on-prem `*http.Client`. ADT-through-CC calls regularly take minutes; observed worst case ~5 minutes. 10 minutes is the per-call ceiling. Override per-instance with `btp.WithOnPremiseTimeout(...)` when the fork's SAP is reliably faster. |
 
-The two values are intentionally **asymmetric**: `WriteTimeout` (one budget for the whole handler) sits 5 min above `DefaultOnPremiseTimeout` (one budget per on-prem call). On a CSRF mutating route — `HEAD/GET` for the token, then `POST` — each leg gets its own 10-min on-prem budget; the 15-min `WriteTimeout` covers both legs plus response write without racing the on-prem timeout. Result: a hung SAP always surfaces as a clean `upstream_unreachable` envelope from the on-prem layer, never as a server-side write timeout.
+The two values are intentionally **asymmetric**: `WriteTimeout` (one budget for the whole handler) sits 5 min above `DefaultOnPremiseTimeout` (one budget per on-prem call).
+On a CSRF mutating route — `HEAD/GET` for the token, then `POST` — each leg gets its own 10-min on-prem budget; the 15-min `WriteTimeout` covers both legs plus response write without racing the on-prem timeout.
+Result: a hung SAP always surfaces as a clean `upstream_unreachable` envelope from the on-prem layer, never as a server-side write timeout.
 
-**CF Gorouter (deployment-managed):** The CF route layer has its own per-request timeout (typically ~900 s, varies by foundation/landscape). It bounds *both* of the above — the 900 s `WriteTimeout` is intentionally aligned with that ceiling. If a fork legitimately needs longer than the route allows, raising the values here is moot — the platform owner has to extend the route timeout.
+**CF Gorouter (deployment-managed):** The CF route layer has its own per-request timeout (typically ~900 s, varies by foundation/landscape).
+It bounds *both* of the above — the 900 s `WriteTimeout` is intentionally aligned with that ceiling. If a fork legitimately needs longer than the route allows, raising the values here is moot — the platform owner has to extend the route timeout.
 
 If a single handler legitimately needs longer than 900 s — large-file streaming, long-poll, exceptionally slow batch — override per-request with `http.NewResponseController(w).SetWriteDeadline(...)` (server side) **and** wrap the on-prem client (or pass a different `WithOnPremiseTimeout` to a dedicated `*btp.Service` instance for that route). Loosening the global defaults re-opens the slow-client surface for every other route.
 
@@ -946,7 +995,6 @@ XSUAA client-credentials tokens are cached with a 30 s refresh leeway and collap
 - [Destination service REST API](https://help.sap.com/docs/connectivity/sap-btp-connectivity-cf/destinations-destination-service-rest-api) — `/destination-configuration/v1/destinations/{name}` is the generic lookup this MWE uses
 - [SAP Cloud SDK (JS) — on-premise connectivity headers](https://sap.github.io/cloud-sdk/docs/js/features/connectivity/on-premise)
 - [BTP-Python-Template](https://github.com/Hochfrequenz/BTP-Python-Template) — the Python analogue
-- [sap-mcp-config](https://github.com/Hochfrequenz/sap-mcp-config) — source of the eager-validation pattern used in `env.go`
 
 ## License
 
