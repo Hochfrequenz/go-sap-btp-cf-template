@@ -23,7 +23,7 @@ Many fork-authors here are SAP-fluent (ABAP / cockpit / Cloud Connector) but not
    - gin: copy `examples/invoicesync/handler_test.go`'s `fakeOnPrem`.
    - huma: copy `examples/adtdiscovery/handler_test.go`'s `fakeCaller`.
    - mutating: copy `examples/adtcheckrun/handler_test.go`'s `fakeMutator`.
-   The CSRF dance is the Service's concern, fully tested in `internal/btp/service_csrf_test.go`. Handler tests do not stub it.
+     The CSRF dance is the Service's concern, fully tested in `internal/btp/service_csrf_test.go`. Handler tests do not stub it.
 9. **Add a `// FORK:` comment** at the destination-name constant (mirroring `examples/adtdiscovery/handler.go:107`) if your handler is intended as a fork crib-sheet.
 
 ## Forbidden patterns (CI gates these where marked)
@@ -38,15 +38,15 @@ Many fork-authors here are SAP-fluent (ABAP / cockpit / Cloud Connector) but not
 
 ## Project structure (where to put things)
 
-| Path | Role | Notes |
-| --- | --- | --- |
-| `cmd/server/main.go` | wiring, route registration, JWT validator setup | Construction site for `*btp.Service`. The only place `*btp.Service` is allowed. |
-| `cmd/apply-config/` | fork-time string rewriter | Must not import `internal/btp` (gated). Adds new walkers when a new template-coupled literal lands. |
-| `internal/btp/` | library-intent surface | What handlers may depend on is listed in `internal/btp/doc.go`. Adding new exports → also list in doc.go. |
-| `examples/` | handler crib-sheets | Each example is self-contained: `handler.go` + `handler_test.go`. Tests use one-method fakes. |
-| `web/` | SAP approuter (Node.js) | Only `xs-app.json` and `package.json` typically need editing. |
-| `docs/btp-deploy-walkthrough.de.md` | chronological deploy diary | German + HF-flavoured. Has a "Since-section" at the bottom; new substantive PRs land an entry there. |
-| `config.yml` | single source of truth for fork-customisable values | Adding a new value → also add a rewriter in `cmd/apply-config/` and a config field. |
+| Path                                | Role                                                | Notes                                                                                                     |
+| ----------------------------------- | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `cmd/server/main.go`                | wiring, route registration, JWT validator setup     | Construction site for `*btp.Service`. The only place `*btp.Service` is allowed.                           |
+| `cmd/apply-config/`                 | fork-time string rewriter                           | Must not import `internal/btp` (gated). Adds new walkers when a new template-coupled literal lands.       |
+| `internal/btp/`                     | library-intent surface                              | What handlers may depend on is listed in `internal/btp/doc.go`. Adding new exports → also list in doc.go. |
+| `examples/`                         | handler crib-sheets                                 | Each example is self-contained: `handler.go` + `handler_test.go`. Tests use one-method fakes.             |
+| `web/`                              | SAP approuter (Node.js)                             | Only `xs-app.json` and `package.json` typically need editing.                                             |
+| `docs/btp-deploy-walkthrough.de.md` | chronological deploy diary                          | German + HF-flavoured. Has a "Since-section" at the bottom; new substantive PRs land an entry there.      |
+| `config.yml`                        | single source of truth for fork-customisable values | Adding a new value → also add a rewriter in `cmd/apply-config/` and a config field.                       |
 
 ## When stuck
 
