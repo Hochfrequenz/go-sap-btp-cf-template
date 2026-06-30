@@ -511,7 +511,7 @@ func (s *Service) callOnce(ctx context.Context, dest *Destination, method, pathS
 	// SSRF guard: the user-influenced pathSuffix must not be able to
 	// redirect the call away from the destination's own scheme+host.
 	if req.URL.Scheme != base.Scheme || req.URL.Host != base.Host {
-		return nil, fmt.Errorf("on-prem request target %q does not match destination host %q://%q", target, base.Scheme, base.Host)
+		return nil, fmt.Errorf("on-prem request target %q does not match destination host %s://%s", target, base.Scheme, base.Host)
 	}
 	for k, vs := range headers {
 		if strings.EqualFold(k, "Cookie") {
