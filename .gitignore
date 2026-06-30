@@ -26,6 +26,13 @@ bin/
 # Local CF-push variables (copied from vars.example.yml, holds per-deploy values)
 vars.yml
 
+# Local service-binding dumps used to run the app off-platform. `cf env`
+# / VCAP_SERVICES copied into one of these holds the XSUAA, Destination,
+# and Connectivity client secrets in cleartext — never commit them.
+default-env.json
+.env
+*.env
+
 # Claude Code session-management / local-settings tooling. Not sensitive
 # today, but the directory's contents are evolving and should never be
 # accidentally staged via `git add -A`.
