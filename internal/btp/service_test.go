@@ -376,6 +376,22 @@ func Test_Service_CallOnPremise_RejectsPercentEncodedPath(t *testing.T) {
 	}
 }
 
+// Test_Service_CallOnPremise_RejectsUnparseableDestinationURL covers the
+// SSRF host-pinning guard's parse step: a destination whose URL the SAP
+// Destination service hands back cannot be turned into a request target,
+// so the call fails closed rather than dialling an attacker-influenced
+// host. url.Parse rejects an unterminated IPv6 literal, which is the
+// cheapest way to drive that branch through the public API.
+func Test_Service_CallOnPremise_RejectsUnparseableDestinationURL(t *testing.T) {
+	s := newBTPStack(t, `{"destinationConfiguration":{"URL":"http://[::1"}}`)
+	svc, err := btp.NewService(s.env)
+	then.AssertThat(t, err, is.Nil())
+
+	_, err = svc.CallOnPremise(context.Background(), "D", http.MethodGet, "/ping", nil, nil)
+	then.AssertThat(t, err, is.Not(is.Nil()))
+	then.AssertThat(t, strings.Contains(err.Error(), "parse destination url"), is.True())
+}
+
 // Test_NewService_ZeroOptionsFallBackToDefaults pins the explicit
 // "zero means default" semantics on ServiceOptions. Callers that
 // compose a struct-style options without knowing which fields to set
