@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -483,7 +484,19 @@ func (s *Service) invalidateCSRF(destName string) {
 }
 
 func (s *Service) callOnce(ctx context.Context, dest *Destination, method, pathSuffix string, headers http.Header, body io.Reader) (*http.Response, error) {
-	target := trimSlash(dest.URL)
+	// Parse the destination base URL up front so we can pin the request's
+	// scheme+host below. dest.URL comes from the SAP Destination service
+	// (operator-configured, trusted); pathSuffix is user-influenced and
+	// only sanitised for traversal/encoding in CallOnPremise. Pinning the
+	// host here closes the remaining server-side-request-forgery gap: even
+	// if a future caller forwards a crafted suffix, the request can never
+	// be steered to a different scheme or host than the configured
+	// destination.
+	base, err := url.Parse(trimSlash(dest.URL))
+	if err != nil {
+		return nil, fmt.Errorf("parse destination url %q: %w", dest.URL, err)
+	}
+	target := base.String()
 	if pathSuffix != "" {
 		if !strings.HasPrefix(pathSuffix, "/") {
 			pathSuffix = "/" + pathSuffix
@@ -494,6 +507,11 @@ func (s *Service) callOnce(ctx context.Context, dest *Destination, method, pathS
 	req, err := http.NewRequestWithContext(ctx, method, target, body)
 	if err != nil {
 		return nil, fmt.Errorf("build on-prem request: %w", err)
+	}
+	// SSRF guard: the user-influenced pathSuffix must not be able to
+	// redirect the call away from the destination's own scheme+host.
+	if req.URL.Scheme != base.Scheme || req.URL.Host != base.Host {
+		return nil, fmt.Errorf("on-prem request target %q does not match destination host %s://%s", target, base.Scheme, base.Host)
 	}
 	for k, vs := range headers {
 		if strings.EqualFold(k, "Cookie") {
