@@ -27,6 +27,8 @@ jobs:
   gate:
     name: gate (test + vet + lint + fmt)
     runs-on: ubuntu-latest
+    env:
+      GOTOOLCHAIN: go1.27.0
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
