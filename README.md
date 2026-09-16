@@ -884,7 +884,7 @@ go test ./... -race
 go test ./... -covermode=count -coverprofile=coverage.out
 ```
 
-CI enforces 90% line coverage (`.github/workflows/coverage.yml`).
+CI enforces 94% line coverage (`.github/workflows/coverage.yml`).
 
 If you need to exercise Gin handlers against real (stub) BTP services locally, set the env explicitly — the required shape matches `internal/btp/env.go` struct tags.
 

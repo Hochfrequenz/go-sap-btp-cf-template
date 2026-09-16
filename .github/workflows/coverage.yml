@@ -25,6 +25,7 @@ jobs:
           path: "coverage.lcov"
           # The composition root (cmd/server/main.go — signal handling,
           # ListenAndServe, os.Exit paths) cannot be meaningfully unit
-          # tested; exclude it so the 90 % gate reflects the library layer.
+          # tested; exclude it so the gate reflects the library layer.
+          # Current measured coverage for the non-cmd packages is ~94.3%.
           exclude: "**/cmd/**"
-          min_coverage: 90 # the plan is to increase this with time
+          min_coverage: 94
