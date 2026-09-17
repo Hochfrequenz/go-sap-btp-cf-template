@@ -10,7 +10,7 @@ applications:
   # directly by end users; the approuter is the public entry point.
   #
   # We use binary_buildpack deliberately: the classic go_buildpack invokes
-  # the Go toolchain on the CF stager, which on eu10 OOMs with Go 1.26 +
+  # the Go toolchain on the CF stager, which on eu10 OOMs with Go 1.27 +
   # Gin 1.12 dep trees (see README §Deployment). Cross-compiling locally
   # or in CI produces a static ./bin/server and the stager just launches
   # it. The `command` below is what binary_buildpack runs on start.

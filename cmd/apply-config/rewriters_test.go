@@ -36,17 +36,17 @@ func testConfig() *Config {
 }
 
 func Test_transformGoMod_ReplacesModuleLine(t *testing.T) {
-	in := []byte("module github.com/hochfrequenz/go-sap-btp-cloud-foundry-mwe\n\ngo 1.26\n\nrequire (\n\tgithub.com/foo/bar v1.0.0\n)\n")
+	in := []byte("module github.com/hochfrequenz/go-sap-btp-cloud-foundry-mwe\n\ngo 1.27\n\nrequire (\n\tgithub.com/foo/bar v1.0.0\n)\n")
 	out, err := transformGoMod(in, testConfig())
 	then.AssertThat(t, err, is.Nil())
 	then.AssertThat(t, strings.Contains(string(out), "module github.com/acme/cool-service"), is.True())
 	// nothing else should change
-	then.AssertThat(t, strings.Contains(string(out), "go 1.26"), is.True())
+	then.AssertThat(t, strings.Contains(string(out), "go 1.27"), is.True())
 	then.AssertThat(t, strings.Contains(string(out), "github.com/foo/bar v1.0.0"), is.True())
 }
 
 func Test_transformGoMod_MissingModuleLine(t *testing.T) {
-	_, err := transformGoMod([]byte("go 1.26\n"), testConfig())
+	_, err := transformGoMod([]byte("go 1.27\n"), testConfig())
 	then.AssertThat(t, err, is.Not(is.Nil()))
 }
 

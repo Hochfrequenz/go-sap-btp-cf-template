@@ -1,6 +1,6 @@
 module github.com/hochfrequenz/go-sap-btp-cf-template
 
-go 1.26.0
+go 1.27.0
 
 require (
 	github.com/MicahParks/keyfunc/v3 v3.8.2

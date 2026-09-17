@@ -7,12 +7,16 @@ permissions:
 jobs:
   coverage:
     runs-on: ubuntu-latest
+    env:
+      # proxy.golang.org intermittently returned INTERNAL_ERROR during dependency resolution.
+      # Keep a fallback mirror in the CI job so the coverage run is resilient to that outage.
+      GOPROXY: https://proxy.golang.org,https://goproxy.io,direct
     steps:
       - name: Install Go
         if: success()
         uses: actions/setup-go@v7
         with:
-          go-version: 1.26.x
+          go-version: 1.27.x
       - name: Checkout Code
         uses: actions/checkout@v7
       - name: Calc coverage

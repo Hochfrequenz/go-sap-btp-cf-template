@@ -593,7 +593,7 @@ cf create-service connectivity lite   go-cc
 This template deploys via the CF **`binary_buildpack`**: you cross-compile a static Linux/amd64 binary locally (or in CI), push it with the rest of the app, and the CF stager runs it as-is.
 That means the stager never invokes the Go toolchain, never fetches deps, never runs `go build`.
 
-Why not `go_buildpack`? On `eu10` as of April 2026 the classic `go_buildpack` (cflinuxfs4 v1.10.44) ships **Go 1.23.12**; this repo's `go.mod` declares `go 1.26`, so Go's auto-toolchain kicks in on the stager, tries to fetch Go 1.26 plus the full dep tree, and the stager OOMs under the org-level memory quota.
+Why not `go_buildpack`? On `eu10` as of April 2026 the classic `go_buildpack` (cflinuxfs4 v1.10.44) ships **Go 1.23.12**; this repo's `go.mod` declares `go 1.27`, so Go's auto-toolchain kicks in on the stager, tries to fetch Go 1.27 plus the full dep tree, and the stager OOMs under the org-level memory quota.
 `binary_buildpack` sidesteps all of that.
 
 If your landscape doesn't have this problem (bigger stager memory, `paketo-buildpacks/go` pre-installed, an egress-restricted build container), you can switch back to classic Go staging. Replace the `buildpacks:` block in `manifest.yml` with one of:

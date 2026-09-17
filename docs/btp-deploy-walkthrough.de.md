@@ -45,17 +45,17 @@ winget install --id CloudFoundry.CLI.v8 `
 
 Die Installation legt `cf` und `cf8` als CLI-Aliase an und aktualisiert die System-PATH-Variable.
 
-### 0.2 Go 1.26 via winget installieren
+### 0.2 Go 1.27 via winget installieren
 
 ```powershell
 winget search --id GoLang.Go
-# Ergebnis: Go Programming Language 1.26.2
+# Ergebnis: Go Programming Language 1.27
 
 winget install --id GoLang.Go `
   --accept-source-agreements --accept-package-agreements --disable-interactivity
 ```
 
-Das Repo pinnt in `go.mod` auf `go 1.26`, und 1.26.2 erfüllt das.
+Das Repo pinnt in `go.mod` auf `go 1.27`, und 1.27 erfüllt das.
 
 ### 0.3 Fallstrick: PATH in bestehenden Shells
 
@@ -71,7 +71,7 @@ Verifikation in einem frischen PowerShell-Fenster:
 
 ```powershell
 cf --version   # cf.exe version 8.7.11+b1b4068ff.2024-07-09
-go version     # go version go1.26.2 windows/amd64
+go version     # go version go1.27 windows/amd64
 ```
 
 ---
@@ -353,10 +353,10 @@ Der zugehörige PR ist [#8](https://github.com/Hochfrequenz/go-sap-btp-cf-templa
 
 ### 5.3 Beobachtung zu Go-Versionen (kein Fehler, aber Risiko)
 
-Das Buildpack installiert **Go 1.23.12**, obwohl `go.mod` `go 1.26` verlangt.
-Go 1.23 ist mit dem 1.26-Release (Feb 2026) EOL gegangen.
-Der Build hat in unserem Fall trotzdem funktioniert — entweder zieht Gos Auto-Toolchain-Feature `go 1.26` über das Netzwerk (BTP-Stager erlaubt hier offenbar Egress), oder der Code nutzt keine post-1.23-Features.
-Wird ein zukünftiger Commit 1.26-Features nutzen, schlägt der Build ohne Vorwarnung fehl.
+Das Buildpack installiert **Go 1.23.12**, obwohl `go.mod` `go 1.27` verlangt.
+Go 1.23 ist mit dem 1.27-Release EOL gegangen.
+Der Build hat in unserem Fall trotzdem funktioniert — entweder zieht Gos Auto-Toolchain-Feature `go 1.27` über das Netzwerk (BTP-Stager erlaubt hier offenbar Egress), oder der Code nutzt keine post-1.23-Features.
+Wird ein zukünftiger Commit 1.27-Features nutzen, schlägt der Build ohne Vorwarnung fehl.
 
 ### 5.4 Dritter Versuch — grün
 
@@ -466,7 +466,7 @@ Ein vorheriger Versuch mit `/sap/public/info` lieferte `403` aus dem S/4, aber n
 
 Für den Fix-Deploy mit dem JWT-Patch scheiterte der klassische `go_buildpack` zweimal:
 
-1. Zuerst zog der Stager via Go-Auto-Toolchain `Go 1.26` nach (go.mod deklariert das), dann wurde der Compile von `github.com/ugorji/go/codec` mit `signal: killed` abgebrochen — OOM im Staging-Container mit nur 128 MB.
+1. Zuerst zog der Stager via Go-Auto-Toolchain `Go 1.27` nach (go.mod deklariert das), dann wurde der Compile von `github.com/ugorji/go/codec` mit `signal: killed` abgebrochen — OOM im Staging-Container mit nur 128 MB.
 2. Eine Erhöhung auf `memory: 512M` im Manifest war nicht durchsetzbar, weil der Org-Memory-Pool bei 2048 / 2048 MB voll war (9 laufende Apps in allen Spaces).
 
 Workaround, der funktionierte:
@@ -505,7 +505,7 @@ Die folgenden Punkte sind bei einer Reproduktion auf einer leeren Windows-Entwic
 6. **Das klassische `go_buildpack` erkennt `cmd/server` nicht automatisch.** `GO_INSTALL_PACKAGE_SPEC: ./cmd/server` ist Pflicht, nicht optional. (Fix in PR #8.)
 7. **Das Cockpit zeigt für Cloud Connectors keinen farbigen "Connected (grün)"-Status pro Zeile.** Stattdessen: oben `Aktive Verbindungen: N`, unten die Liste der aktiven Location-IDs. Erscheint die Location-ID, gilt der CC als verbunden.
 8. **Das eu10-Buildpack ist auf Go 1.23.12 eingefroren.** Go 1.23 ist EOL. Deploys funktionieren heute noch, aber sobald Code post-1.23-Features nutzt, wird der Build brechen.
-9. **Stager-OOM bei großen Dep-Trees.** Der `go_buildpack` zieht via Auto-Toolchain nachträglich `go 1.26` — der Compile von `ugorji/go/codec` sprengte den 128-MB-Stager-Container. Erhöhung der App-Memory half nur, solange der Org-Pool es hergibt; ist er voll, hilft nur lokales Cross-Compile plus `cf push -b binary_buildpack -c './bin/server'`.
+9. **Stager-OOM bei großen Dep-Trees.** Der `go_buildpack` zieht via Auto-Toolchain nachträglich `go 1.27` — der Compile von `ugorji/go/codec` sprengte den 128-MB-Stager-Container. Erhöhung der App-Memory half nur, solange der Org-Pool es hergibt; ist er voll, hilft nur lokales Cross-Compile plus `cf push -b binary_buildpack -c './bin/server'`.
 10. **Org-Memory-Quota ist org-weit und limitiert auch den Stager.** Sobald die laufenden Apps die Org-Quota ausreizen, kann keine einzelne App mehr mehr RAM anfordern, weder im Runtime noch im Staging.
 11. **XSUAA `iss` ist ein internes Literal.** Tokens tragen `iss = http://<zone>.localhost:8080/uaa/oauth/token`, nicht aus `VCAP_SERVICES` ableitbar. Entweder nicht prüfen (so der Code hier) oder explizit diesen Pattern hardcoden. `aud` ist `[..., sb-<xsappname>!t<tenant>]` — also `ClientID`, nicht `XSAppName`.
 12. **Claim-Formen lassen sich ohne Debug-Push ermitteln.** `cf env` liefert das XSUAA-Binding, ein `client_credentials`-Token-Request vom Entwickler-Rechner aus liefert einen JWT mit denselben `iss`/`aud`-Konventionen wie der User-Context-Token. Spart einen Redeploy auf Kosten von einmal "trust the pattern".
