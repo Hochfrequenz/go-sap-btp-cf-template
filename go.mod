@@ -4,7 +4,7 @@ go 1.27.0
 
 require (
 	github.com/MicahParks/keyfunc/v3 v3.8.2
-	github.com/corbym/gocrest v1.2.2
+	github.com/corbym/gocrest v1.3.0
 	github.com/danielgtaylor/huma/v2 v2.39.1
 	github.com/gin-gonic/gin v1.12.0
 	github.com/goccy/go-yaml v1.19.2
