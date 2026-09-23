@@ -262,6 +262,7 @@ jobs:
           done <<'PATTERNS'
           LICENSE Hochfrequenz copyright|rg --quiet Hochfrequenz LICENSE
           CODEOWNERS Hochfrequenz team|rg --quiet Hochfrequenz .github/CODEOWNERS
+          Demo routes|rg --quiet 'adtdiscovery\.Register|adtcheckrun\.Register' cmd/server/main.go
           PATTERNS
           if [ "$fail" -ne 0 ]; then
             exit 1
