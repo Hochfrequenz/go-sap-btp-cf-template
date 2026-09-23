@@ -21,7 +21,7 @@ is `validator.Middleware()` (any valid token from the bound XSUAA instance);
 `buildRouter` uses no `btp.RequireScope` anywhere.
 
 One route is `POST /api/adt-checkrun` through the CSRF handshake
-(`adtcheckrun/handler.go:86-87`, `svc.CallOnPremiseMutating`). It mutates
+(`adtcheckrun/handler.go:128`, `svc.CallOnPremiseMutating`). It mutates
 nothing in SAP (ADT check runs are protocol-mutating, not data-writing), but
 it is still a POST to `/sap/bc/adt/checkruns` that a fork did not knowingly
 expose. The issue author shipped both to two production deployments and only
@@ -73,25 +73,29 @@ Two design points from the issue shape this test directly:
 
 ### Expected shipped allow-list
 
-Derived from `buildRouter` and huma's default mount paths (`/openapi.json`,
-`/openapi.yaml`, `/docs`, `/schemas` become `/api/...` because huma is
-mounted on the `api` group):
+The huma-generated routes are pinned wholesale from the first run of
+`r.Routes()` rather than enumerated by hand. huma v2.38.0 registers four
+OpenAPI-spec routes (`/api/openapi.json`, `/api/openapi-3.0.json`,
+`/api/openapi.yaml`, `/api/openapi-3.0.yaml`), plus `/api/docs` and
+`/api/schemas/:schema` (gin emits the path-param form `:schema`, not a
+`*` wildcard). Hand-enumerating these invites the exact defect the reviewer
+caught (two `-3.0` downgrade routes omitted), so the allow-list is built by
+capturing the observed route table on first run and committing that set.
+
+The hand-known, non-huma routes the allow-list must contain:
 
 ```
 GET    /healthz
 GET    /version
 GET    /api/me
-GET    /api/openapi.json
-GET    /api/openapi.yaml
-GET    /api/docs
 GET    /api/adt-discovery      # huma-registered, appears in OpenAPI
 POST   /api/adt-checkrun        # gin-registered, NOT in OpenAPI
-GET    /api/schemas/*          # huma schema route (prefix)
 ```
 
-The `/api/schemas/*` exact shape is pinned empirically on first run from the
-observed `r.Routes()` output, not guessed, so a huma version bump that
-changes internals surfaces as a real diff rather than a wrong guess.
+Plus the huma-generated block (all four OpenAPI-spec variants, `/api/docs`,
+`/api/schemas/:schema`), captured from first-run `r.Routes()` output. A huma
+version bump that changes internals surfaces as a real diff against the
+committed set.
 
 ### Failure mode
 
@@ -142,21 +146,32 @@ routes", not "the concrete JWKS-fetching type".
   a new fake vocabulary.
 - Logger: `slog.New(slog.NewJSONHandler(io.Discard, nil))`.
 
-## Mechanism 3: README signpost row
+## Mechanism 3: README signpost row + gate entry
 
 One row added to the "manual fork chores" table at `README.md:112`:
 
 | Item | Where | How to find | Why not rewritten |
 | --- | --- | --- | --- |
-| Demo routes | `cmd/server/main.go` | `rg 'Register\(api' cmd/server/main.go` | The two demo `Register` calls go live once `examples.destination_name` points at your destination; remove them if you don't want the routes. |
+| Demo routes | `cmd/server/main.go` | `rg 'adtdiscovery\.Register\|adtcheckrun\.Register' cmd/server/main.go` | The two demo `Register` calls go live once `examples.destination_name` points at your destination; remove them if you don't want the routes. |
 
-The `rg 'Register\(api'` pattern is what the existing `template-guards.yml`
-gate bit-rots on: if someone removes both calls, the pattern stops matching
-and the gate fails — surfacing the removal rather than letting the signpost
-go stale silently. The pattern matches `cmd/server/main.go:257-258`
-(`adtdiscovery.Register(hapi, caller)` uses `hapi`, not `api` — the pattern
-must be `Register\(` anchored on the examples' `api`-taking form, or
-broadened; verify the exact pattern matches both lines during implementation).
+The pattern is `rg 'adtdiscovery\.Register\|adtcheckrun\.Register'` (most
+precise; matches both lines 257-258, where `adtdiscovery.Register` takes
+`hapi` and `adtcheckrun.Register` takes `api` — a naive `Register\(api`
+matches only the second).
+
+The manual-chores gate does NOT parse README rows. It reads patterns from a
+hardcoded bash heredoc in `.github/workflows/template-guards.yml:262-265`
+(the `<<'PATTERNS' ... PATTERNS` block). Adding the README row alone does
+nothing for bit-rot detection. To wire the safety property — "if someone
+removes both calls, the gate fails" — append one line to that heredoc:
+
+```
+Demo routes|rg --quiet 'adtdiscovery\.Register\|adtcheckrun\.Register' cmd/server/main.go
+```
+
+This is why `.github/workflows/template-guards.yml` is in the Files-touched
+table below. Without that edit, the README row is pure documentation and
+the spec's bit-rot claim does not hold.
 
 ## What this does not change
 
@@ -173,12 +188,16 @@ broadened; verify the exact pattern matches both lines during implementation).
 | `cmd/server/main.go` | `buildRouter` signature: `*btp.JWTValidator` → unexported `routeGuard` interface. |
 | `cmd/server/router_test.go` | New. Route-table allow-list test. |
 | `README.md` | One signpost row in the manual-chores table. |
+| `.github/workflows/template-guards.yml` | Append `Demo routes\|rg --quiet '...'` to the `PATTERNS` heredoc (lines 262-265) so the new row is bit-rot-checked. |
 
 ## Verification
 
 - `go test ./cmd/server/ -run TestRouter` passes against the shipped route
-  set.
+  set (allow-list pinned from first-run `r.Routes()` output, including the
+  two huma `-3.0` downgrade routes).
 - Adding a stray `api.GET("/stray", ...)` to `buildRouter` fails the test
   with a message naming the unexpected route.
 - `main()` still compiles passing its real `*btp.JWTValidator`.
-- `template-guards.yml`'s manual-chores gate passes with the new row.
+- `template-guards.yml`'s manual-chores gate enforces the new row: removing
+  both `Register` calls makes the appended `PATTERNS` entry return 0 hits
+  and the gate fails.
