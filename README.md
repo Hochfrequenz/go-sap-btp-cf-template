@@ -114,6 +114,7 @@ The list below is what survives `apply-config` on a freshly-forked tree, with th
 | README prose             | `README.md`                         | reading                   | HF-flavoured by intent; documents the running deploy. Strip or replace as your fork sees fit. |
 | Walkthrough              | `docs/btp-deploy-walkthrough.de.md` | reading                   | German + chronological deploy diary; Hochfrequenz-specific by design.                         |
 | `LICENSE` copyright line | `LICENSE`                           | `rg Hochfrequenz LICENSE` | Upstream attribution; usually keep + add your own copyright above.                            |
+| Demo routes              | `cmd/server/main.go`                | `rg 'adtdiscovery\.Register|adtcheckrun\.Register' cmd/server/main.go` | The two demo `Register` calls go live once `examples.destination_name` points at your destination; remove them if you don't want the routes. |
 
 `.github/workflows/template-guards.yml` runs each documented `rg` pattern against the upstream tree on every PR - if a row's pattern stops matching anything on this repo, the gate fails. That surfaces bit-rot (item removed without doc update) before the list quietly goes stale; forks that strip an item legitimately can drop the row from the table or relax the gate.
 
