@@ -152,12 +152,14 @@ One row added to the "manual fork chores" table at `README.md:112`:
 
 | Item | Where | How to find | Why not rewritten |
 | --- | --- | --- | --- |
-| Demo routes | `cmd/server/main.go` | `rg 'adtdiscovery\.Register\|adtcheckrun\.Register' cmd/server/main.go` | The two demo `Register` calls go live once `examples.destination_name` points at your destination; remove them if you don't want the routes. |
+| Demo routes | `cmd/server/main.go` | `rg 'adtdiscovery\.Register|adtcheckrun\.Register' cmd/server/main.go` | The two demo `Register` calls go live once `examples.destination_name` points at your destination; remove them if you don't want the routes. |
 
-The pattern is `rg 'adtdiscovery\.Register\|adtcheckrun\.Register'` (most
+The pattern is `rg 'adtdiscovery\.Register|adtcheckrun\.Register'` (most
 precise; matches both lines 257-258, where `adtdiscovery.Register` takes
 `hapi` and `adtcheckrun.Register` takes `api` — a naive `Register\(api`
-matches only the second).
+matches only the second). Use an unescaped `|` for alternation: ripgrep's
+default Rust-regex engine treats `\|` as a literal pipe character, which
+matches nothing on these lines.
 
 The manual-chores gate does NOT parse README rows. It reads patterns from a
 hardcoded bash heredoc in `.github/workflows/template-guards.yml:262-265`
@@ -166,7 +168,7 @@ nothing for bit-rot detection. To wire the safety property — "if someone
 removes both calls, the gate fails" — append one line to that heredoc:
 
 ```
-Demo routes|rg --quiet 'adtdiscovery\.Register\|adtcheckrun\.Register' cmd/server/main.go
+Demo routes|rg --quiet 'adtdiscovery\.Register|adtcheckrun\.Register' cmd/server/main.go
 ```
 
 This is why `.github/workflows/template-guards.yml` is in the Files-touched
