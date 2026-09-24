@@ -81,7 +81,7 @@ type DiscoveryOutput struct {
 // destination name and SAP path are closed over in the handler so the
 // route is not path-parameterised — that's the constrained-proxy
 // pattern. huma generates the OpenAPI operation, request/response
-// schemas, and the Swagger UI entry from the function signature
+// schemas, and the interactive docs entry from the function signature
 // alone.
 func Register(api huma.API, svc btp.OnPremCaller) {
 	huma.Register(api, huma.Operation{

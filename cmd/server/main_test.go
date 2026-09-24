@@ -37,11 +37,24 @@ func Test_logLevelFromEnv_MapsKnownAndUnknown(t *testing.T) {
 		{"trace", slog.LevelInfo},    // unknown → INFO
 		{"nonsense", slog.LevelInfo}, // unknown → INFO
 	}
+
 	for _, c := range cases {
 		t.Setenv("LOG_LEVEL", c.in)
 		got := logLevelFromEnv()
 		then.AssertThat(t, got, is.EqualTo(c.want))
 	}
+}
+
+func Test_openAPIConfig_DeclaresBearerAuth(t *testing.T) {
+	cfg := openAPIConfig()
+	scheme, ok := cfg.Components.SecuritySchemes["bearerAuth"]
+	if !ok {
+		t.Fatal("bearerAuth security scheme is missing")
+	}
+	then.AssertThat(t, scheme.Type, is.EqualTo("http"))
+	then.AssertThat(t, scheme.Scheme, is.EqualTo("bearer"))
+	then.AssertThat(t, scheme.BearerFormat, is.EqualTo("JWT"))
+	then.AssertThat(t, cfg.Security, is.EqualTo([]map[string][]string{{"bearerAuth": {}}}))
 }
 
 // Test_recoverPanic_EmitsTypedEnvelope pins the recovery contract: a

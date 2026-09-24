@@ -37,6 +37,27 @@ cf:
 	then.AssertThat(t, err, is.Nil())
 	then.AssertThat(t, cfg.App.Name, is.EqualTo("my-app"))
 	then.AssertThat(t, cfg.Services.XSUAA, is.EqualTo("my-xsuaa"))
+	then.AssertThat(t, cfg.App.Title, is.EqualTo("Go SAP BTP CF Template"))
+	then.AssertThat(t, cfg.App.Version, is.EqualTo("0.1"))
+}
+
+func Test_LoadConfig_AcceptsCustomOpenAPIMetadata(t *testing.T) {
+	path := writeTemp(t, `
+app:
+  name: my-app
+  module: github.com/acme/my-app
+  title: "ACME Service"
+  version: "2.3"
+cf:
+  api: https://api.cf.eu10.hana.ondemand.com
+  org: ORG
+  space: dev
+  domain: cfapps.eu10.hana.ondemand.com
+`)
+	cfg, err := LoadConfig(path)
+	then.AssertThat(t, err, is.Nil())
+	then.AssertThat(t, cfg.App.Title, is.EqualTo("ACME Service"))
+	then.AssertThat(t, cfg.App.Version, is.EqualTo("2.3"))
 }
 
 func Test_LoadConfig_DerivesServicesFromAppName(t *testing.T) {
