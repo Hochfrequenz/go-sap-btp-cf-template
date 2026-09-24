@@ -44,6 +44,9 @@ type AppConfig struct {
 	// Module is the Go module path — exactly what ends up in go.mod
 	// and in every Go import statement.
 	Module string `yaml:"module"`
+	// Title and Version identify the generated OpenAPI document.
+	Title   string `yaml:"title"`
+	Version string `yaml:"version"`
 }
 
 // ServicesConfig names the three CF service instances the backend
@@ -95,6 +98,14 @@ func LoadConfig(path string) (*Config, error) {
 func (c *Config) applyDefaults() {
 	c.App.Name = strings.TrimSpace(c.App.Name)
 	c.App.Module = strings.TrimSpace(c.App.Module)
+	c.App.Title = strings.TrimSpace(c.App.Title)
+	c.App.Version = strings.TrimSpace(c.App.Version)
+	if c.App.Title == "" {
+		c.App.Title = "Go SAP BTP CF Template"
+	}
+	if c.App.Version == "" {
+		c.App.Version = "0.1"
+	}
 	c.Services.XSUAA = strings.TrimSpace(c.Services.XSUAA)
 	c.Services.Destination = strings.TrimSpace(c.Services.Destination)
 	c.Services.Connectivity = strings.TrimSpace(c.Services.Connectivity)

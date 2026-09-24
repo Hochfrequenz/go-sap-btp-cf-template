@@ -409,9 +409,9 @@ Local debugging: set `LOG_LEVEL=debug` before running the server to see `DEBUG`-
 
 ---
 
-### OpenAPI 3.1 + Swagger UI via huma
+### OpenAPI 3.1 + interactive docs via huma
 
-The router mounts a [huma v2](https://huma.rocks/) API on top of the same `api` group, so every handler registered through huma appears in an auto-generated OpenAPI 3.1 spec - and a Swagger UI rendered from it - with **no comments, no annotations, no manual spec to maintain**.
+The router mounts a [huma v2](https://huma.rocks/) API on top of the same `api` group, so every handler registered through huma appears in an auto-generated OpenAPI 3.1 spec - and Stoplight Elements rendered from it - with **no comments, no annotations, no manual spec to maintain**.
 This means no frickling with neither easy-to-get-wrong endpoint annotations nor badly auto-generated code from mediocre API first / code generation tools.
 
 | Path                    | Served                                             |
@@ -419,7 +419,7 @@ This means no frickling with neither easy-to-get-wrong endpoint annotations nor 
 | `/api/openapi.json`     | OpenAPI 3.1 (JSON)                                 |
 | `/api/openapi.yaml`     | Same, YAML                                         |
 | `/api/openapi-3.0.json` | OpenAPI 3.0.3 (for tools that don't speak 3.1 yet) |
-| `/api/docs`             | Swagger UI                                         |
+| `/api/docs`             | Stoplight Elements                                 |
 | `/api/schemas/*`        | Referenced JSON Schemas                            |
 
 These sit under `/api`, so the JWT middleware applies — the spec describes a JWT-gated API; reading it requires the same auth.
@@ -458,7 +458,7 @@ Both can coexist on the same router group; pick one per handler — never mix th
 
 | Need                                                                                                                | Pick              | Why                                                                                                                   |
 | ------------------------------------------------------------------------------------------------------------------- | ----------------- | --------------------------------------------------------------------------------------------------------------------- |
-| Read-only (GET) and you want OpenAPI 3.1 / Swagger UI coverage                                                      | **huma**          | The route auto-appears in `/openapi.json`; no manual spec wiring.                                                     |
+| Read-only (GET) and you want OpenAPI 3.1 / interactive docs coverage                                               | **huma**          | The route auto-appears in `/openapi.json`; no manual spec wiring.                                                     |
 | Mutating (POST / PUT / DELETE / PATCH) and you need `user_name` (or any other claim) from the JWT for audit logging | **gin**           | `c.MustGet("jwtClaims")` is on the hot path; `btp.AbortError` carries the typed envelope.                             |
 | Mutating without claim access                                                                                       | **gin** (default) | Same envelope shape as the rest of the typed-error story; consistent with the two existing mutating examples.         |
 | Tied — could go either way                                                                                          | **gin**           | Matches more existing examples (2 of 3); easier for fork-authors to consistency-check against the canonical patterns. |

@@ -17,8 +17,10 @@ import (
 func testConfig() *Config {
 	cfg := &Config{
 		App: AppConfig{
-			Name:   "acme-app",
-			Module: "github.com/acme/cool-service",
+			Name:    "acme-app",
+			Module:  "github.com/acme/cool-service",
+			Title:   "ACME Service",
+			Version: "2.3",
 		},
 		Services: ServicesConfig{
 			XSUAA:        "acme-xsuaa",
@@ -32,7 +34,22 @@ func testConfig() *Config {
 			Domain: "cfapps.us10.hana.ondemand.com",
 		},
 	}
+
 	return cfg
+}
+
+func Test_transformServerMainGo_ReplacesOpenAPIMetadata(t *testing.T) {
+	in := []byte(`cfg := huma.DefaultConfig("Go SAP BTP CF Template", "0.1")`)
+	out, err := transformServerMainGo(in, testConfig())
+	then.AssertThat(t, err, is.Nil())
+	then.AssertThat(t, string(out), is.EqualTo(`cfg := huma.DefaultConfig("ACME Service", "2.3")`))
+}
+
+func Test_transformServerMainGo_IsIdempotent(t *testing.T) {
+	in := []byte(`cfg := huma.DefaultConfig("ACME Service", "2.3")`)
+	out, err := transformServerMainGo(in, testConfig())
+	then.AssertThat(t, err, is.Nil())
+	then.AssertThat(t, string(out), is.EqualTo(string(in)))
 }
 
 func Test_transformGoMod_ReplacesModuleLine(t *testing.T) {
