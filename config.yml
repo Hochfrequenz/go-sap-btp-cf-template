@@ -25,6 +25,10 @@ app:
   # import. Host/org/repo style, e.g. github.com/yourorg/your-repo.
   module: github.com/hochfrequenz/go-sap-btp-cf-template
 
+  # Title and version shown in the generated OpenAPI document.
+  title: Go SAP BTP CF Template
+  version: "0.1"
+
 # CF service instance names the backend binds to. Leave any field blank
 # to derive it as `<app.name>-xsuaa` / `-dest` / `-cc`.
 services:

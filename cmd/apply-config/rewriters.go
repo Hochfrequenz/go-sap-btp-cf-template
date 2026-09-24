@@ -164,6 +164,7 @@ func singleFileRewriters() []Rewriter {
 		{Name: "vars.example.yml", Path: "vars.example.yml", Transform: transformVarsExampleYml},
 		{Name: "web/package.json", Path: "web/package.json", Transform: transformPackageJson},
 		{Name: ".github/workflows/deploy.yml", Path: ".github/workflows/deploy.yml", Transform: transformDeployYml},
+		{Name: "cmd/server/main.go", Path: "cmd/server/main.go", Transform: transformServerMainGo},
 	}
 }
 
@@ -177,7 +178,17 @@ func transformGoMod(old []byte, cfg *Config) ([]byte, error) {
 	if !re.Match(old) {
 		return nil, errors.New("go.mod: no `module <path>` line")
 	}
+
 	return re.ReplaceAll(old, []byte("module "+cfg.App.Module)), nil
+}
+
+func transformServerMainGo(old []byte, cfg *Config) ([]byte, error) {
+	re := regexp.MustCompile(`huma\.DefaultConfig\("(?:\\.|[^"\\])*",\s*"(?:\\.|[^"\\])*"\)`)
+	if !re.Match(old) {
+		return nil, errors.New("cmd/server/main.go: no huma.DefaultConfig call")
+	}
+	replacement := []byte(fmt.Sprintf(`huma.DefaultConfig(%q, %q)`, cfg.App.Title, cfg.App.Version))
+	return re.ReplaceAll(old, replacement), nil
 }
 
 // transformManifestYml rewrites the `services:` bindings in both the
