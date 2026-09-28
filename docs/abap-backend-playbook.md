@@ -14,17 +14,19 @@ Examples use the namespace `/XYZ/` (files `#xyz#…`). With a customer namespace
 
 ## 1. Conventions both halves agree on
 
+The Go side of these conventions is not in the template. The template's `CallOnPremise` hands your handler the raw response, and `/healthz` is its only probe. Your fork writes the code mapping and `/readyz`. What follows is how the first product did it.
+
 **Every non-2xx the handler answers has a JSON body `{"code":"…"}`, optionally with `"detail"`.** That covers 404, 405, every 4xx and 500. The Go half finds the ABAP code by reading the body. A body that is not JSON, or has no `code`, maps to 502 `upstream_unreachable` ("on-premise system returned HTTP n"). A code the Go build has no mapping for is also a 502, so **ship the Go mapping before the ABAP code goes live**. Go forwards `detail` to its client only for codes whose detail comes from the caller: values the caller sent, or facts the API already publishes. Codes that describe system state keep their detail in the Go log. Keep a detail to one short sentence.
 
 **ABAP codes are internal.** Go maps every ABAP code to its own client-facing code and status, and the client-facing set is the contract. The ABAP side still sets a sensible HTTP status (404 for "not found", 5xx for its own faults), so that a proxy, a log line or someone with `curl` is not told "bad request" about a missing object. Keep the code-to-status mapping in one `CASE` in the handler. Exceptions carry the code as data, not a status.
 
 **`sap-client` is required configuration, never a request parameter.** Without it ICF falls back to the system's default client (`login/system_client`). On a multi-client system the wrong client answers **200 with the wrong data**. Where the technical user does not exist in the default client, you get a 401 that says nothing about clients. Make the Go app refuse to start without a valid client, append `sap-client=<client>` to every on-premise path in one place (the template does not do this for you), and have `GET /system` report the client so a consumer can check it. Making the client a request parameter would need `CLIENT SPECIFIED` on every `SELECT` and turns a wrong parameter into a silent wrong answer.
 
-**A read-only API: CSRF off on the ICF node, and every call goes through `CallOnPremise`, POST reads included.** Reads that carry a body (a filter tree, a table name) are POSTs, because the HTTP `QUERY` method is rejected by ICF, by the Connectivity proxy and by OpenAPI alike. `CallOnPremiseMutating` fetches a CSRF token **unconditionally**, whatever the method. On a node that issues no token it fails the call with a 502 before the request is sent. If you ever switch CSRF protection on at the node, ICF rejects unsafe methods before your handler runs, and the call path has to be decided again. A write API is a separate design decision, not a switch to the other helper. If you do use `CallOnPremiseMutating`, point `btp.WithCSRFFetchPath` at a GET on your own node **with `sap-client`**. Otherwise the fetch authenticates against the default client and every write 401s.
+**A read-only API: CSRF off on the ICF node, and every call goes through `CallOnPremise`, POST reads included.** Reads that carry a body (a filter tree, a table name) are POSTs, because the HTTP `QUERY` method is rejected by ICF, by the Connectivity proxy and by OpenAPI alike. `CallOnPremiseMutating` fetches a CSRF token first **whatever the method**, from `WithCSRFFetchPath` (default `/sap/bc/adt/discovery`). If that path is your own node, which issues no token, the helper returns an error before the request is sent, and `ClassifyOnPremError` turns it into a 502 "on-premise transport error". If you ever switch CSRF protection on at the node, ICF rejects unsafe methods before your handler runs, and the call path has to be decided again. A write API is a separate design decision, not a switch to the other helper. If you do use `CallOnPremiseMutating`, point `btp.WithCSRFFetchPath` at a GET on your own node **with `sap-client`**. Otherwise the fetch authenticates against the default client: it 401s where the technical user does not exist there, and a token from another client is not valid for yours.
 
 **`GET /system` is the readiness target.** It is the cheapest GET on the node and answers `{"sid":"…","client":"…","release":"…"}`, all strings. Go's `/readyz` probes it with its own short deadline (about 10 s, not the query deadline), caches the result for about 30 s, and answers a coarse `{"status","upstream"}` only: no SID, no hostname, no error text. CF's platform health check stays on `/healthz`. A health check that depends on SAP turns a Cloud Connector blip into an app restart.
 
-**Timeouts are Go context deadlines.** ABAP has no cooperative cancellation point inside a running Open SQL statement. When Go gives up, the work process runs to completion or until the system's maximum runtime (`rdisp/max_wprun_time`) ends it with a `TIME_OUT` dump. A client that retries a 504 without backoff piles up work processes on the SAP system. Document backoff on 504 for your API's clients, and set the deadline per deployment, because a legacy system may need a longer leash than a newer one.
+**Timeouts are Go context deadlines.** ABAP has no cooperative cancellation point inside a running Open SQL statement. When Go gives up, the work process runs to completion or until the system's maximum runtime (`rdisp/max_wprun_time`, or `rdisp/scheduler/max_runtime` on newer kernels) ends it with a `TIME_OUT` dump. A client that retries a 504 without backoff piles up work processes on the SAP system. Document backoff on 504 for your API's clients, and set the deadline per deployment, because a legacy system may need a longer leash than a newer one.
 
 **Decide where authorization lives, and write the decision down.** The first product put all of it in Go: XSUAA scopes and a per-deployment switch for content reads. It had no `AUTHORITY-CHECK` in ABAP, no `S_ICF` on the node, and Open SQL performs no table authorization check of its own. The Cloud Connector path allow-list was the only SAP-side control, and the API could reach everything the technical user can reach. That was right for a read-only API behind one technical user with trusted callers. It is not automatically right for yours. If you keep it, mark in the code where an `AUTHORITY-CHECK` would go.
 
@@ -32,9 +34,9 @@ Examples use the namespace `/XYZ/` (files `#xyz#…`). With a customer namespace
 
 1. Go: a path constant and the endpoint that calls it.
 2. ABAP: the per-path allowed-methods table **and** the dispatch `CASE`. A path in only one of them answers 404 `path_not_found`, which reads like a SICF problem rather than missing code.
-3. The Cloud Connector allow-list, if its entries are per path rather than one prefix. A path the allow-list does not cover never reaches SAP, and Go shows it as a bare 502, as if the whole system were down.
+3. The Cloud Connector allow-list, if its entries are per path rather than one prefix. A path the allow-list does not cover never reaches SAP; it arrives as a non-JSON answer, which Go maps to 502, as if the whole system were down.
 
-**`X-Request-Id` is forwarded and echoed.** Go sends its request ID on the on-premise call, and the ABAP handler validates it, echoes it on every response it writes and records it with every failure. This is not implemented yet. It lands with the X-Request-Id items of #132. ICF's own 401/403 never reach the handler, so they cannot carry the ID.
+**Planned: `X-Request-Id` forwarded and echoed.** Go sends its request ID on the on-premise call, and the ABAP handler validates it, echoes it on every response it writes and records it with every failure. The first product's Go side forwards it; the ABAP side is not implemented yet. Both are tracked in #132. ICF's own 401/403 never reach the handler, so they cannot carry the ID.
 
 ## 2. Pitfalls
 
@@ -64,13 +66,14 @@ Do: never write abapGit XML by hand. Create the object in SAP and let abapGit se
 
 **Diagnose by status code.** 401 and 403 come from ICF before your handler runs, which is why they carry no JSON body:
 
-| Status                              | Means                                                                                                                                                                                                  | Check                                                     |
-| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------- |
-| 404                                 | wrong path: the node does not exist, or the handler does not know the sub-path. A body `{"code":"path_not_found"}` means your handler ran, so the node is fine and the path is missing from its tables | SICF tree; the handler's allowed-methods table and `CASE` |
-| 401                                 | the node is **active** and wants credentials: wrong user or password, or a user that does not exist in the client used (a missing `sap-client`)                                                        | Destination user; `sap-client` on the call                |
-| 403                                 | the node **exists but is inactive**                                                                                                                                                                    | `icfservloc-icfactive`; reactivate in SICF                |
-| 405                                 | the handler ran; the path exists but not with this method. The `Allow` header names the accepted ones                                                                                                  | Go's method for that path                                 |
-| 502 from Go, transport-error detail | the call never reached SAP: the Cloud Connector refused the path, or the system is down                                                                                                                | allow-list entry for the path; `/readyz`                  |
+| Status                                    | Means                                                                                                                                                                                                  | Check                                                                                              |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
+| 404                                       | wrong path: the node does not exist, or the handler does not know the sub-path. A body `{"code":"path_not_found"}` means your handler ran, so the node is fine and the path is missing from its tables | SICF tree; the handler's allowed-methods table and `CASE`                                          |
+| 401                                       | the node is **active** and wants credentials: wrong user or password, or a user that does not exist in the client used (a missing `sap-client`)                                                        | Destination user; `sap-client` on the call                                                         |
+| 403                                       | the node **exists but is inactive**                                                                                                                                                                    | `icfservloc-icfactive`; reactivate in SICF                                                         |
+| 405                                       | the handler ran; the path exists but not with this method. The `Allow` header names the accepted ones                                                                                                  | Go's method for that path                                                                          |
+| 502 from Go (non-2xx or transport detail) | the call may never have reached SAP: the Cloud Connector refuses a path outside its allow-list (expected to show as the connector's own non-JSON 403, not measured), or the system is down             | allow-list entry for the path; the body text in the Go log (ICF page vs connector page); `/readyz` |
+| 500 with an HTML body (Go: 502)           | a short dump                                                                                                                                                                                           | ST22                                                                                               |
 
 Call the node directly with `curl -u '<user>:<password>' 'https://<host>:<port>/sap/bc/rest/xyz/fooapi/system?sap-client=<client>'` to take BTP out of the picture. Check the `client` field in the answer.
 
@@ -93,7 +96,7 @@ Cause: the ADT and SAP GUI tooling keep separate system selections, and a select
 Do: before activating, running tests you will report, or measuring anything, run `SELECT component, release FROM cvers WHERE component = 'SAP_BASIS'`. Two systems on different releases answer differently.
 
 **CI is green, and the code fails to compile on SAP.**
-Cause: abaplint parses; it neither executes nor type-checks. Defects that reached SAP through a clean abaplint run include a 34-character method name, a `'…'` literal where a `string` table row needed backticks, and a missing `RAISING` clause.
+Cause: abaplint parses; with this config it neither executes nor type-checks. Defects that reached SAP through a clean abaplint run include a 34-character method name, a `'…'` literal where a `string` table row needed backticks, and a missing `RAISING` clause.
 Do: treat a lint run as a lint run. A test has run only when it has run on a real system. Report counts and the system, for example "35/35 green on the ECC system".
 
 ### Syntax floor and compile traps
@@ -114,7 +117,7 @@ Do: treat a lint run as a lint run. A test has run only when it has run on a rea
 
 **A defect in ABAP shows up in Go as "upstream unreachable".**
 Cause: an uncaught exception short-dumps the work process, and ICF answers with an HTML error page. Go finds no `code` in HTML and reports the Cloud Connector path as broken.
-Do: catch `cx_root` at the handler boundary and answer 500 `{"code":"internal_error"}` (see the [handler skeleton](#handler-skeleton)). Go then sees a code and knows the two halves are talking. A caught exception leaves no ST22 entry, so record what you need (code, detail, `previous->get_text( )`) yourself. Only uncatchable errors such as `TIME_OUT` still dump and still answer HTML.
+Do: catch `cx_root` at the handler boundary and answer 500 `{"code":"internal_error"}` (see the [handler skeleton](#handler-skeleton)). Go then sees a code and knows the two halves are talking. A caught exception leaves no ST22 entry, so record what you need (code, detail, `previous->get_text( )`) yourself. Only uncatchable errors still dump and still answer HTML: `TIME_OUT`, memory exhaustion (`TSV_TNEW_PAGE_ALLOC_FAILED`), a failed `ASSERT`, or an unhandled classic function-module exception. Large `SELECT`s are where these bite.
 
 ### Optional add-ons
 
@@ -143,7 +146,7 @@ METHOD /xyz/if_fooapi_presence~is_present.
 ENDMETHOD.
 ```
 
-Inject the interface through the constructor (defaulting to the class itself), so a test double covers the absent branch on systems that all have the add-on. Use DD02L with `AS4LOCAL = 'A'`, not ADT's object-existence probe, which gives false negatives for namespaced DDIC objects. **Absence is not emptiness.** An add-on that is not installed raises its own code (the first product used 501 `not_implemented`: not 404, which sends people looking for a typo, and not 503, because there is nothing to retry). An add-on that is installed but has no data answers 200 with an empty list. Map the new code explicitly on both halves. The ABAP `WHEN OTHERS` answers 400 and would blame the caller.
+Inject the interface through the constructor (defaulting to the class itself), so a test double covers the absent branch on systems that all have the add-on. Use DD02L with `AS4LOCAL = 'A'`, not ADT's object-existence probe, which gives false negatives for namespaced DDIC objects. **Absence is not emptiness.** An add-on that is not installed raises its own code (the first product raised `optional_source_absent`, answered 501, and Go mapped it to its own 501 `not_implemented`: not 404, which sends people looking for a typo, and not 503, because there is nothing to retry). An add-on that is installed but has no data answers 200 with an empty list. Map the new code explicitly on both halves. The ABAP `WHEN OTHERS` answers 400 and would blame the caller.
 
 ### Two halves, two release moments
 
@@ -173,13 +176,13 @@ CLASS /xyz/cx_fooapi DEFINITION
     " Internal codes. Go maps every one to its own client-facing code.
     CONSTANTS c_not_found     TYPE string VALUE 'not_found' ##NO_TEXT.
     CONSTANTS c_invalid_value TYPE string VALUE 'invalid_value' ##NO_TEXT.
-    CONSTANTS c_internal      TYPE string VALUE 'internal' ##NO_TEXT.
+    CONSTANTS c_internal      TYPE string VALUE 'internal_error' ##NO_TEXT.
 
     DATA code   TYPE string READ-ONLY.
     DATA detail TYPE string READ-ONLY.
 
     " Always pass io_previous when wrapping a kernel exception, or the
-    " root cause is gone from ST22 and the debugger.
+    " root cause is gone from your log line and the debugger.
     METHODS constructor
       IMPORTING iv_code     TYPE string
                 iv_detail   TYPE string OPTIONAL
@@ -310,8 +313,8 @@ CLASS /xyz/cl_fooapi_json IMPLEMENTATION.
   ENDMETHOD.
 
   METHOD write_number.
-    " The string template drops the blanks a plain conversion of an i
-    " would keep, which would make an invalid JSON number.
+    " The string template gives -5; a plain assignment of an i would
+    " give '5-' (sign on the right), which is not a JSON number.
     DATA lv_text TYPE string.
     lv_text = |{ iv_value }|.
     mo_writer->open_element( name = 'num' ).
@@ -473,6 +476,8 @@ CLASS /xyz/cl_fooapi_handler IMPLEMENTATION.
       " Anything else is our bug. Uncaught, it dumps and ICF serves HTML.
       " The CX_SXML_* exceptions are CX_DYNAMIC_CHECK and end up here too.
       CATCH cx_root.
+        " Record code, get_text( ) and previous here (application log or
+        " your own table): a caught exception leaves no ST22 entry.
         server->response->set_content_type( c_json ).
         server->response->set_status( code = 500 reason = 'Internal Server Error' ).
         server->response->set_cdata( '{"code":"internal_error"}' ).
@@ -503,6 +508,8 @@ CLASS /xyz/cl_fooapi_handler IMPLEMENTATION.
     CASE iv_code.
       WHEN /xyz/cx_fooapi=>c_not_found.
         rv_status = 404.
+      WHEN /xyz/cx_fooapi=>c_invalid_value.
+        rv_status = 400.
       WHEN /xyz/cx_fooapi=>c_internal.
         rv_status = 500.
       WHEN OTHERS.
@@ -570,7 +577,7 @@ ENDCLASS.
 
 The first product's handler wrote `{"code"}` only and dropped `detail`. The `error_body( )` above adds it, so test it before you rely on it, and keep a detail free of anything the caller did not send.
 
-Register the class as the handler of the SICF node (`/sap/bc/rest/xyz/fooapi`) and dispatch sub-paths from `~path_info` in the handler rather than creating one SICF node per path. Adding a path then costs the handler, the allow-list and the Go client, rather than a new node and Destination as well.
+Register the class as the handler of the SICF node (`/sap/bc/rest/xyz/fooapi`). With these example names the child `fooapi` sorts before its parent `xyz`, which is the failing case under the SICF ordering pitfall above: either keep the parent node out of the package (create `/sap/bc/rest/xyz` once by hand on each system), pick a child name that sorts after the parent's, or, with a `Z` namespace, hang `zfooapi` directly under `/sap/bc/rest`. Dispatch sub-paths from `~path_info` in the handler rather than creating one SICF node per path. Adding a path then costs the handler, the allow-list and the Go client, rather than a new node and Destination as well.
 
 ### `IF_HTTP_SERVER` test double
 
@@ -766,7 +773,7 @@ If you knowingly use a construct the 7.40 grammar rejects but your kernels accep
 
 Tests that need real rows read a small fixture table of your own, never business data. The table holds exactly the rows one report puts there, identically on every system. Two tests on two systems then compare like with like.
 
-The table, `/XYZ/FOOAPI_FX`: client-dependent, transparent, key `MANDT` + `KEYCHAR` (`CHAR 20`), and one field per data type your code formats (`VAL_FLTP`, `VAL_DEC`, `VAL_DATS`, `VAL_STRG`, …). Create it in SE11 or through ADT, then let abapGit serialize it. Choose key values where collations disagree if they disagree at all: case pairs, an embedded space, a hyphen, an underscore, a non-ASCII letter, digits with and without a space. An all-uppercase ASCII key set proves nothing about ordering.
+The table, `/XYZ/FOOAPI_FX`: client-dependent, transparent, key `MANDT` + `KEYCHAR` (`CHAR 20`), and one field per data type your code formats (`VAL_FLTP`, `VAL_DEC` as `DEC 15,2`, `VAL_DATS`, `VAL_STRG`, …). Table names are limited to 16 characters, and `/XYZ/` already uses 5 of them. Create it in SE11 or through ADT, then let abapGit serialize it. Choose key values where collations disagree if they disagree at all: case pairs, an embedded space, a hyphen, an underscore, a non-ASCII letter, digits with and without a space. An all-uppercase ASCII key set proves nothing about ordering.
 
 ```abap
 REPORT /xyz/fooapi_fixture_setup.
