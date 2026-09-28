@@ -153,13 +153,15 @@ const maxOnPremRedirects = 10
 // case-insensitively; an explicit default port still counts as a
 // different host (fail closed).
 func checkOnPremRedirect(req *http.Request, via []*http.Request) error {
-	if len(via) >= maxOnPremRedirects {
-		return fmt.Errorf("stopped after %d redirects", maxOnPremRedirects)
-	}
+	// Origin first, so a cross-origin redirect reports the sentinel even
+	// when it is also the hop that reaches the limit.
 	origin := via[0].URL
 	if req.URL.Scheme != origin.Scheme || !strings.EqualFold(req.URL.Host, origin.Host) {
 		return fmt.Errorf("%w: %s://%s redirected to %s://%s",
 			ErrOnPremCrossOriginRedirect, origin.Scheme, origin.Host, req.URL.Scheme, req.URL.Host)
+	}
+	if len(via) >= maxOnPremRedirects {
+		return fmt.Errorf("stopped after %d redirects", maxOnPremRedirects)
 	}
 	return nil
 }
@@ -586,6 +588,13 @@ func (s *Service) callOnce(ctx context.Context, dest *Destination, method, pathS
 
 	if err := s.authenticators.Apply(ctx, req, dest); err != nil {
 		return nil, fmt.Errorf("apply destination auth: %w", err)
+	}
+	// Re-check the pin: an authenticator receives the mutable request
+	// (DestinationAuthenticator is a public extension point), so a custom
+	// one could otherwise steer it to another scheme or host.
+	if req.URL.Scheme != base.Scheme || req.URL.Host != base.Host {
+		return nil, fmt.Errorf("destination authenticator changed the on-prem request target to %s://%s; destination host is %s://%s",
+			req.URL.Scheme, req.URL.Host, base.Scheme, base.Host)
 	}
 	resp, err := s.onPremClient.Do(req)
 	if err != nil {

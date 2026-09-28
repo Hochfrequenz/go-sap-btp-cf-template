@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -51,6 +52,13 @@ func newBTPStack(t *testing.T, destBody string) *btpStack {
 	// On-prem "SAP". The test proxy below forwards to here.
 	s.onPrem = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.calls.Add(1)
+		// /redirect-chain-1 .. -9 redirect to the next link of the chain.
+		if n, ok := strings.CutPrefix(r.URL.Path, "/redirect-chain-"); ok {
+			if i, err := strconv.Atoi(n); err == nil && i < 10 {
+				http.Redirect(w, r, fmt.Sprintf("/redirect-chain-%d", i+1), http.StatusFound)
+				return
+			}
+		}
 		// Fixed paths that answer with a redirect, for the redirect tests.
 		switch r.URL.Path {
 		case "/redirect-off-host":
@@ -67,6 +75,10 @@ func newBTPStack(t *testing.T, destBody string) *btpStack {
 			return
 		case "/redirect-host-case":
 			http.Redirect(w, r, "http://SAP.Example:8000/landed", http.StatusFound)
+			return
+		case "/redirect-chain-10":
+			// The 10th redirect of a chain leaves the origin.
+			http.Redirect(w, r, "http://elsewhere.example/landed", http.StatusFound)
 			return
 		case "/redirect-loop":
 			http.Redirect(w, r, "/redirect-loop", http.StatusFound)
@@ -478,6 +490,49 @@ func Test_Service_CallOnPremise_FollowsSameOriginRedirect(t *testing.T) {
 			then.AssertThat(t, int(s.strayCalls.Load()), is.EqualTo(0))
 		})
 	}
+}
+
+// Test_Service_CallOnPremise_CrossOriginOnLastHopReportsSentinel: when the
+// redirect that reaches the hop limit is also cross-origin, the caller
+// still gets ErrOnPremCrossOriginRedirect, not the generic limit error.
+func Test_Service_CallOnPremise_CrossOriginOnLastHopReportsSentinel(t *testing.T) {
+	s := newRedirectStack(t)
+	svc, err := btp.NewService(s.env)
+	then.AssertThat(t, err, is.Nil())
+
+	resp, err := svc.CallOnPremise(context.Background(), "D", http.MethodGet, "/redirect-chain-1", nil, nil)
+	then.AssertThat(t, resp == nil, is.True())
+	then.AssertThat(t, int(s.strayCalls.Load()), is.EqualTo(0))
+	then.AssertThat(t, errors.Is(err, btp.ErrOnPremCrossOriginRedirect), is.True())
+}
+
+// rewritingAuthenticator is a custom DestinationAuthenticator that steers
+// the request to another host, for the post-Apply pin check.
+type rewritingAuthenticator struct{}
+
+func (rewritingAuthenticator) AuthType() btp.AuthType { return btp.AuthNone }
+func (rewritingAuthenticator) Apply(_ context.Context, req *http.Request, _ *btp.Destination) error {
+	req.URL.Host = "elsewhere.example"
+	return nil
+}
+
+// Test_Service_CallOnPremise_RejectsAuthenticatorRewritingHost: an
+// authenticator receives the mutable request, so the scheme+host pin is
+// re-checked after it runs.
+func Test_Service_CallOnPremise_RejectsAuthenticatorRewritingHost(t *testing.T) {
+	s := newRedirectStack(t)
+	svc, err := btp.NewService(s.env)
+	then.AssertThat(t, err, is.Nil())
+	svc.Authenticators().Register(rewritingAuthenticator{})
+
+	resp, err := svc.CallOnPremise(context.Background(), "D", http.MethodGet, "/x", nil, nil)
+	then.AssertThat(t, resp == nil, is.True())
+	then.AssertThat(t, int(s.strayCalls.Load()), is.EqualTo(0))
+	then.AssertThat(t, int(s.calls.Load()), is.EqualTo(0))
+	if err == nil {
+		t.Fatal("expected an error, got nil")
+	}
+	then.AssertThat(t, strings.Contains(err.Error(), "destination authenticator changed"), is.True())
 }
 
 // Test_Service_CallOnPremise_StopsRedirectLoop: a custom CheckRedirect
