@@ -26,7 +26,7 @@ The Go side of these conventions is not in the template. The template's `CallOnP
 
 **`GET /system` is the readiness target.** It is the cheapest GET on the node and answers `{"sid":"…","client":"…","release":"…"}`, all strings. Go's `/readyz` probes it with its own short deadline (about 10 s, not the query deadline), caches the result for about 30 s, and answers a coarse `{"status","upstream"}` only: no SID, no hostname, no error text. CF's platform health check stays on `/healthz`. A health check that depends on SAP turns a Cloud Connector blip into an app restart.
 
-**Timeouts are Go context deadlines.** ABAP has no cooperative cancellation point inside a running Open SQL statement. When Go gives up, the work process runs to completion or until the system's maximum runtime (`rdisp/max_wprun_time`, or `rdisp/scheduler/max_runtime` on newer kernels) ends it with a `TIME_OUT` dump. A client that retries a 504 without backoff piles up work processes on the SAP system. Document backoff on 504 for your API's clients, and set the deadline per deployment, because a legacy system may need a longer leash than a newer one.
+**Timeouts are Go context deadlines.** ABAP has no cooperative cancellation point inside a running Open SQL statement. When Go gives up, the work process runs to completion or until the system's maximum runtime (`rdisp/max_wprun_time`; newer kernels replace it with the `rdisp/scheduler/prio_*/max_runtime` parameters, so check which one your system uses) ends it with a `TIME_OUT` dump. A client that retries a 504 without backoff piles up work processes on the SAP system. Document backoff on 504 for your API's clients, and set the deadline per deployment, because a legacy system may need a longer leash than a newer one.
 
 **Decide where authorization lives, and write the decision down.** The first product put all of it in Go: XSUAA scopes and a per-deployment switch for content reads. It had no `AUTHORITY-CHECK` in ABAP, no `S_ICF` on the node, and Open SQL performs no table authorization check of its own. The Cloud Connector path allow-list was the only SAP-side control, and the API could reach everything the technical user can reach. That was right for a read-only API behind one technical user with trusted callers. It is not automatically right for yours. If you keep it, mark in the code where an `AUTHORITY-CHECK` would go.
 
@@ -36,7 +36,7 @@ The Go side of these conventions is not in the template. The template's `CallOnP
 2. ABAP: the per-path allowed-methods table **and** the dispatch `CASE`. A path in only one of them answers 404 `path_not_found`, which reads like a SICF problem rather than missing code.
 3. The Cloud Connector allow-list, if its entries are per path rather than one prefix. A path the allow-list does not cover never reaches SAP; it arrives as a non-JSON answer, which Go maps to 502, as if the whole system were down.
 
-**Planned: `X-Request-Id` forwarded and echoed.** Go sends its request ID on the on-premise call, and the ABAP handler validates it, echoes it on every response it writes and records it with every failure. The first product's Go side forwards it; the ABAP side is not implemented yet. Both are tracked in #132. ICF's own 401/403 never reach the handler, so they cannot carry the ID.
+**Planned: `X-Request-Id` forwarded and echoed.** Go sends its request ID on the on-premise call, and the ABAP handler validates it, echoes it on every response it writes and records it with every failure. Neither half of the first product does this on its released version yet: forwarding on the Go side is in review, the ABAP side is not started. Both are tracked in #132. ICF's own 401/403 never reach the handler, so they cannot carry the ID.
 
 ## 2. Pitfalls
 
@@ -117,7 +117,7 @@ Do: treat a lint run as a lint run. A test has run only when it has run on a rea
 
 **A defect in ABAP shows up in Go as "upstream unreachable".**
 Cause: an uncaught exception short-dumps the work process, and ICF answers with an HTML error page. Go finds no `code` in HTML and reports the Cloud Connector path as broken.
-Do: catch `cx_root` at the handler boundary and answer 500 `{"code":"internal_error"}` (see the [handler skeleton](#handler-skeleton)). Go then sees a code and knows the two halves are talking. A caught exception leaves no ST22 entry, so record what you need (code, detail, `previous->get_text( )`) yourself. Only uncatchable errors still dump and still answer HTML: `TIME_OUT`, memory exhaustion (`TSV_TNEW_PAGE_ALLOC_FAILED`), a failed `ASSERT`, or an unhandled classic function-module exception. Large `SELECT`s are where these bite.
+Do: catch `cx_root` at the handler boundary and answer 500 `{"code":"internal_error"}` (see the [handler skeleton](#handler-skeleton)). Go then sees a code and knows the two halves are talking. A caught exception leaves no ST22 entry, so record what you need (code, detail, `previous->get_text( )`) yourself. Only uncatchable errors still dump and still answer HTML: `TIME_OUT`, memory exhaustion (`TSV_TNEW_PAGE_ALLOC_FAILED`), a failed `ASSERT`, or an unhandled classic function-module exception. Large `SELECT`s are where the first two bite.
 
 ### Optional add-ons
 
