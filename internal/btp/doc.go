@@ -68,7 +68,7 @@
 //
 //   - [ErrNoDestinationBinding], [ErrNoConnectivityBinding], [ErrNoXSUAABinding]
 //   - [ErrDestinationNotFound], [ErrNotInCloudFoundry]
-//   - [ErrOnPremResponseTooLarge]
+//   - [ErrOnPremResponseTooLarge], [ErrOnPremCrossOriginRedirect]
 //
 // ## On-prem failure classification
 //

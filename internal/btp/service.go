@@ -130,6 +130,36 @@ const DefaultOnPremResponseSizeLimit int64 = 10 << 20
 // translation in handlers is btp.CodeUpstreamUnreachable (502).
 var ErrOnPremResponseTooLarge = errors.New("on-prem response exceeds configured size limit")
 
+// ErrOnPremCrossOriginRedirect is returned by CallOnPremise and
+// CallOnPremiseMutating when the on-prem system answers with a redirect
+// to a different scheme or host than the request it redirects. Such a
+// redirect is not followed: callOnce pins the first request to the
+// destination's scheme+host, and following a Location elsewhere would
+// send the next request — through the Connectivity proxy, with a fresh
+// Proxy-Authorization — to a target nobody configured. Same-origin
+// redirects are still followed. Like any transport error it classifies
+// as OnPremFailureTransport.
+var ErrOnPremCrossOriginRedirect = errors.New("on-prem redirect to a different scheme or host")
+
+// maxOnPremRedirects matches net/http's default redirect limit, which
+// a custom CheckRedirect replaces and must therefore re-implement.
+const maxOnPremRedirects = 10
+
+// checkOnPremRedirect is the on-prem client's CheckRedirect: follow a
+// redirect only while it stays on the scheme+host of the original
+// request (via[0]), up to maxOnPremRedirects hops.
+func checkOnPremRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= maxOnPremRedirects {
+		return fmt.Errorf("stopped after %d redirects", maxOnPremRedirects)
+	}
+	origin := via[0].URL
+	if req.URL.Scheme != origin.Scheme || req.URL.Host != origin.Host {
+		return fmt.Errorf("%w: %s://%s redirected to %s://%s",
+			ErrOnPremCrossOriginRedirect, origin.Scheme, origin.Host, req.URL.Scheme, req.URL.Host)
+	}
+	return nil
+}
+
 // ServiceOption configures NewService. Use WithUserAgent, WithMgmtTimeout,
 // and WithOnPremiseTimeout to tune the defaults; zero options keeps the
 // built-in values.
@@ -241,7 +271,7 @@ func NewService(env *Env, opts ...ServiceOption) (*Service, error) {
 		tokens:                  tokens,
 		authenticators:          DefaultAuthenticators(),
 		mgmtClient:              &http.Client{Timeout: o.mgmtTimeout},
-		onPremClient:            &http.Client{Transport: transport, Timeout: o.onPremiseTimeout},
+		onPremClient:            &http.Client{Transport: transport, Timeout: o.onPremiseTimeout, CheckRedirect: checkOnPremRedirect},
 		userAgent:               o.userAgent,
 		onPremResponseSizeLimit: o.onPremResponseSizeLimit,
 		csrfFetchPath:           o.csrfFetchPath,
