@@ -26,6 +26,12 @@ type ConnTokenProvider func(ctx *http.Request) (string, error)
 // per-request rather than per-Transport is what lets the RoundTripper
 // stop cloning the Transport on every call — the idle-connection pool
 // stays shared across calls.
+//
+// The transport attaches Proxy-Authorization to every request it carries,
+// including a redirect's follow-up. Service's own client therefore only
+// follows redirects that stay on the original scheme+host (see
+// [ErrOnPremCrossOriginRedirect]); a caller wrapping this transport in
+// its own http.Client should set an equivalent CheckRedirect.
 func NewOnPremiseTransport(conn *ConnCredentials, provider ConnTokenProvider) (http.RoundTripper, error) {
 	if conn == nil {
 		return nil, ErrNoConnectivityBinding

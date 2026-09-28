@@ -130,6 +130,42 @@ const DefaultOnPremResponseSizeLimit int64 = 10 << 20
 // translation in handlers is btp.CodeUpstreamUnreachable (502).
 var ErrOnPremResponseTooLarge = errors.New("on-prem response exceeds configured size limit")
 
+// ErrOnPremCrossOriginRedirect is returned by CallOnPremise and
+// CallOnPremiseMutating when the on-prem system answers with a redirect
+// to a different scheme or host than the request it redirects. Such a
+// redirect is not followed: CallOnPremise pins the first request to the
+// destination's scheme+host, and following a Location elsewhere would
+// send the next request — through the Connectivity proxy, with a fresh
+// Proxy-Authorization, and for the same hostname on another port or
+// scheme also with the destination's Authorization — to a target nobody
+// configured. Same-origin
+// redirects are still followed. Like any transport error it classifies
+// as OnPremFailureTransport.
+var ErrOnPremCrossOriginRedirect = errors.New("on-prem redirect to a different scheme or host")
+
+// maxOnPremRedirects matches net/http's default redirect limit, which
+// a custom CheckRedirect replaces and must therefore re-implement.
+const maxOnPremRedirects = 10
+
+// checkOnPremRedirect is the on-prem client's CheckRedirect: follow a
+// redirect only while it stays on the scheme+host of the original
+// request (via[0]), up to maxOnPremRedirects hops. Hosts compare
+// case-insensitively; an explicit default port still counts as a
+// different host (fail closed).
+func checkOnPremRedirect(req *http.Request, via []*http.Request) error {
+	// Origin first, so a cross-origin redirect reports the sentinel even
+	// when it is also the hop that reaches the limit.
+	origin := via[0].URL
+	if req.URL.Scheme != origin.Scheme || !strings.EqualFold(req.URL.Host, origin.Host) {
+		return fmt.Errorf("%w: %s://%s redirected to %s://%s",
+			ErrOnPremCrossOriginRedirect, origin.Scheme, origin.Host, req.URL.Scheme, req.URL.Host)
+	}
+	if len(via) >= maxOnPremRedirects {
+		return fmt.Errorf("stopped after %d redirects", maxOnPremRedirects)
+	}
+	return nil
+}
+
 // ServiceOption configures NewService. Use WithUserAgent, WithMgmtTimeout,
 // and WithOnPremiseTimeout to tune the defaults; zero options keeps the
 // built-in values.
@@ -241,7 +277,7 @@ func NewService(env *Env, opts ...ServiceOption) (*Service, error) {
 		tokens:                  tokens,
 		authenticators:          DefaultAuthenticators(),
 		mgmtClient:              &http.Client{Timeout: o.mgmtTimeout},
-		onPremClient:            &http.Client{Transport: transport, Timeout: o.onPremiseTimeout},
+		onPremClient:            &http.Client{Transport: transport, Timeout: o.onPremiseTimeout, CheckRedirect: checkOnPremRedirect},
 		userAgent:               o.userAgent,
 		onPremResponseSizeLimit: o.onPremResponseSizeLimit,
 		csrfFetchPath:           o.csrfFetchPath,
@@ -552,6 +588,13 @@ func (s *Service) callOnce(ctx context.Context, dest *Destination, method, pathS
 
 	if err := s.authenticators.Apply(ctx, req, dest); err != nil {
 		return nil, fmt.Errorf("apply destination auth: %w", err)
+	}
+	// Re-check the pin: an authenticator receives the mutable request
+	// (DestinationAuthenticator is a public extension point), so a custom
+	// one could otherwise steer it to another scheme or host.
+	if req.URL.Scheme != base.Scheme || req.URL.Host != base.Host {
+		return nil, fmt.Errorf("destination authenticator changed the on-prem request target to %s://%s; destination host is %s://%s",
+			req.URL.Scheme, req.URL.Host, base.Scheme, base.Host)
 	}
 	resp, err := s.onPremClient.Do(req)
 	if err != nil {
