@@ -147,13 +147,15 @@ const maxOnPremRedirects = 10
 
 // checkOnPremRedirect is the on-prem client's CheckRedirect: follow a
 // redirect only while it stays on the scheme+host of the original
-// request (via[0]), up to maxOnPremRedirects hops.
+// request (via[0]), up to maxOnPremRedirects hops. Hosts compare
+// case-insensitively; an explicit default port still counts as a
+// different host (fail closed).
 func checkOnPremRedirect(req *http.Request, via []*http.Request) error {
 	if len(via) >= maxOnPremRedirects {
 		return fmt.Errorf("stopped after %d redirects", maxOnPremRedirects)
 	}
 	origin := via[0].URL
-	if req.URL.Scheme != origin.Scheme || req.URL.Host != origin.Host {
+	if req.URL.Scheme != origin.Scheme || !strings.EqualFold(req.URL.Host, origin.Host) {
 		return fmt.Errorf("%w: %s://%s redirected to %s://%s",
 			ErrOnPremCrossOriginRedirect, origin.Scheme, origin.Host, req.URL.Scheme, req.URL.Host)
 	}
