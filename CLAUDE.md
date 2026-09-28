@@ -46,12 +46,14 @@ Many fork-authors here are SAP-fluent (ABAP / cockpit / Cloud Connector) but not
 | `examples/`                         | handler crib-sheets                                 | Each example is self-contained: `handler.go` + `handler_test.go`. Tests use one-method fakes.             |
 | `web/`                              | SAP approuter (Node.js)                             | Only `xs-app.json` and `package.json` typically need editing.                                             |
 | `docs/btp-deploy-walkthrough.de.md` | chronological deploy diary                          | German + HF-flavoured. Has a "Since-section" at the bottom; new substantive PRs land an entry there.      |
+| `docs/abap-backend-playbook.md`     | building your own ABAP HTTP API for the Go app      | Read before writing the ABAP half: conventions both halves share, SAP pitfalls, copyable ABAP code.       |
 | `config.yml`                        | single source of truth for fork-customisable values | Adding a new value → also add a rewriter in `cmd/apply-config/` and a config field.                       |
 
 ## When stuck
 
 - **Handler authoring** → README §"Adding your service — the 80 % case".
 - **Deploy** → README §Deployment, then `docs/btp-deploy-walkthrough.de.md` §"Seit dem ersten Deploy gelandete Follow-ups" for what's changed since the chronological diary was written.
+- **Your own ABAP HTTP API behind the Go app** → `docs/abap-backend-playbook.md` (conventions, SAP pitfalls symptom-first, reference ABAP code).
 - **Library surface** → `internal/btp/doc.go`. If your fix needs an unexported identifier, propose adding it to that list.
 - **CI gate fired** → read the gate's error message in `template-guards.yml`. The gate names the exact fix.
 - **Test patterns** → the fakes in `examples/*/handler_test.go` are the canonical references.
