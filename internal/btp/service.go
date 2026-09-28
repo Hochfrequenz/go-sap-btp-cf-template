@@ -133,10 +133,12 @@ var ErrOnPremResponseTooLarge = errors.New("on-prem response exceeds configured 
 // ErrOnPremCrossOriginRedirect is returned by CallOnPremise and
 // CallOnPremiseMutating when the on-prem system answers with a redirect
 // to a different scheme or host than the request it redirects. Such a
-// redirect is not followed: callOnce pins the first request to the
+// redirect is not followed: CallOnPremise pins the first request to the
 // destination's scheme+host, and following a Location elsewhere would
 // send the next request — through the Connectivity proxy, with a fresh
-// Proxy-Authorization — to a target nobody configured. Same-origin
+// Proxy-Authorization, and for the same hostname on another port or
+// scheme also with the destination's Authorization — to a target nobody
+// configured. Same-origin
 // redirects are still followed. Like any transport error it classifies
 // as OnPremFailureTransport.
 var ErrOnPremCrossOriginRedirect = errors.New("on-prem redirect to a different scheme or host")

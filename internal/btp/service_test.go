@@ -51,7 +51,7 @@ func newBTPStack(t *testing.T, destBody string) *btpStack {
 	// On-prem "SAP". The test proxy below forwards to here.
 	s.onPrem = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.calls.Add(1)
-		// Two fixed paths answer with a redirect, for the redirect tests.
+		// Fixed paths that answer with a redirect, for the redirect tests.
 		switch r.URL.Path {
 		case "/redirect-off-host":
 			http.Redirect(w, r, "http://elsewhere.example/landed", http.StatusFound)
@@ -64,6 +64,9 @@ func newBTPStack(t *testing.T, destBody string) *btpStack {
 			return
 		case "/redirect-same-host":
 			http.Redirect(w, r, "/landed", http.StatusFound)
+			return
+		case "/redirect-host-case":
+			http.Redirect(w, r, "http://SAP.Example:8000/landed", http.StatusFound)
 			return
 		case "/redirect-loop":
 			http.Redirect(w, r, "/redirect-loop", http.StatusFound)
@@ -88,7 +91,7 @@ func newBTPStack(t *testing.T, destBody string) *btpStack {
 		}
 		// The client sends an absolute URL for HTTP-through-HTTP-proxy.
 		u, err := url.Parse(r.RequestURI)
-		if r.Method == http.MethodConnect || err != nil || u.Scheme+"://"+u.Host != redirectDest {
+		if r.Method == http.MethodConnect || err != nil || !strings.EqualFold(u.Scheme+"://"+u.Host, redirectDest) {
 			s.strayCalls.Add(1)
 		}
 		if err != nil || u.Host == "" {
@@ -438,7 +441,7 @@ func newRedirectStack(t *testing.T) *btpStack {
 // net/http follows the Location through the same Connectivity transport.
 func Test_Service_CallOnPremise_RejectsCrossOriginRedirect(t *testing.T) {
 	for _, path := range []string{"/redirect-off-host", "/redirect-other-scheme", "/redirect-other-port"} {
-		t.Run(path, func(t *testing.T) {
+		t.Run(strings.TrimPrefix(path, "/"), func(t *testing.T) {
 			s := newRedirectStack(t)
 			svc, err := btp.NewService(s.env)
 			then.AssertThat(t, err, is.Nil())
@@ -454,19 +457,27 @@ func Test_Service_CallOnPremise_RejectsCrossOriginRedirect(t *testing.T) {
 }
 
 // Test_Service_CallOnPremise_FollowsSameOriginRedirect: a redirect that
-// stays on the destination's origin is still followed.
+// stays on the destination's origin is still followed, including one
+// that spells the host in another case.
 func Test_Service_CallOnPremise_FollowsSameOriginRedirect(t *testing.T) {
-	s := newRedirectStack(t)
-	svc, err := btp.NewService(s.env)
-	then.AssertThat(t, err, is.Nil())
+	for _, path := range []string{"/redirect-same-host", "/redirect-host-case"} {
+		t.Run(strings.TrimPrefix(path, "/"), func(t *testing.T) {
+			s := newRedirectStack(t)
+			svc, err := btp.NewService(s.env)
+			then.AssertThat(t, err, is.Nil())
 
-	resp, err := svc.CallOnPremise(context.Background(), "D", http.MethodGet, "/redirect-same-host", nil, nil)
-	then.AssertThat(t, err, is.Nil())
-	defer func() { _ = resp.Body.Close() }()
-	body, err := io.ReadAll(resp.Body)
-	then.AssertThat(t, err, is.Nil())
-	then.AssertThat(t, resp.StatusCode, is.EqualTo(http.StatusOK))
-	then.AssertThat(t, string(body), is.EqualTo(`{"ok":true,"path":"/landed"}`))
+			resp, err := svc.CallOnPremise(context.Background(), "D", http.MethodGet, path, nil, nil)
+			if err != nil {
+				t.Fatalf("CallOnPremise(%s): %v", path, err)
+			}
+			defer func() { _ = resp.Body.Close() }()
+			body, err := io.ReadAll(resp.Body)
+			then.AssertThat(t, err, is.Nil())
+			then.AssertThat(t, resp.StatusCode, is.EqualTo(http.StatusOK))
+			then.AssertThat(t, string(body), is.EqualTo(`{"ok":true,"path":"/landed"}`))
+			then.AssertThat(t, int(s.strayCalls.Load()), is.EqualTo(0))
+		})
+	}
 }
 
 // Test_Service_CallOnPremise_StopsRedirectLoop: a custom CheckRedirect
