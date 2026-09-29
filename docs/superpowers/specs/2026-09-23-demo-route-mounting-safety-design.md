@@ -150,9 +150,9 @@ routes", not "the concrete JWKS-fetching type".
 
 One row added to the "manual fork chores" table at `README.md:112`:
 
-| Item        | Where                | How to find                 | Why not rewritten                          |
-| ----------- | -------------------- | --------------------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| Demo routes | `cmd/server/main.go` | `rg 'adtdiscovery\.Register | adtcheckrun\.Register' cmd/server/main.go` | The two demo `Register` calls go live once `examples.destination_name` points at your destination; remove them if you don't want the routes. |
+| Item        | Where                | How to find                                                             | Why not rewritten                                                                                                                            |
+| ----------- | -------------------- | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| Demo routes | `cmd/server/main.go` | `rg 'adtdiscovery\.Register\|adtcheckrun\.Register' cmd/server/main.go` | The two demo `Register` calls go live once `examples.destination_name` points at your destination; remove them if you don't want the routes. |
 
 The pattern is `rg 'adtdiscovery\.Register|adtcheckrun\.Register'` (most
 precise; matches both lines 257-258, where `adtdiscovery.Register` takes

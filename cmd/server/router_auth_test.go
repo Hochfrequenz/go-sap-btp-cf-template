@@ -34,7 +34,7 @@ var publicRoutes = map[string]bool{
 // This is a different failure mode than Test_RouterAllowList: that test
 // catches a route landing at an unexpected PATH; this one catches a route
 // landing at an EXPECTED path but outside the authenticated group (e.g. a
-// demo mounted on r instead of api). Deliberately proven to fail below.
+// demo mounted on r instead of api).
 func Test_RouterAllowList_AuthGated(t *testing.T) {
 	teapot := func(c *gin.Context) { c.AbortWithStatus(http.StatusTeapot) }
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
