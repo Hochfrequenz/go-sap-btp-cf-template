@@ -12,7 +12,7 @@ Many fork-authors here are SAP-fluent (ABAP / cockpit / Cloud Connector) but not
 
 1. **Pick the style.** huma (typed, OpenAPI-generated) vs gin (direct claim access, `ginpingo.AbortError`). Decision table at README §"OpenAPI 3.1 + Swagger UI via huma" (right after the huma example): GET + want OpenAPI → huma; POST/PUT/DELETE/PATCH + need `user_name` for audit → gin; everything else → gin (default). Never mix the two styles in one handler.
 2. **Place files.** New handlers live at `examples/<your-name>/handler.go` + `handler_test.go`. Tests sit next to the handler.
-3. **Register the route** from `buildRouter` in `cmd/server/main.go:187`. New routes hang off the JWT-guarded `api` group.
+3. **Register the route** from `buildRouter` in `cmd/server/main.go:189`. New routes hang off the JWT-guarded `api` group.
 4. **Depend on interfaces, not Service.** Handler signatures take `btpingo.OnPremCaller` (reads) or `btpingo.OnPremMutator` (CSRF writes). Never `*btpingo.Service`. The full library-intent surface lives at `btpingo`'s `doc.go` (https://pkg.go.dev/github.com/hochfrequenz/btpingo) and `ginpingo`'s `doc.go` (https://pkg.go.dev/github.com/hochfrequenz/btpingo/ginpingo).
 5. **Validate at the Gin / huma boundary.** Request struct with `binding:"required,..."` tags, never raw `c.Request.Body` or `json.RawMessage` to `CallOnPremise`. See README §"Validate and sanitise at the Gin layer, not in SAP".
 6. **Errors via the blessed envelope.**
@@ -31,7 +31,7 @@ Many fork-authors here are SAP-fluent (ABAP / cockpit / Cloud Connector) but not
 - `c.JSON(..., gin.H{"error": ...})` — leaks `err.Error()` into the response. Use `ginpingo.AbortError`. See README §"Return errors with a stable envelope".
 - `*btpingo.Service` outside `cmd/server/main.go` — **gated** by `template-guards.yml`'s "Handlers must depend on btpingo interfaces" step.
 - `slog.Warn(...)` / any `.Warn(` log call — **gated** by `template-guards.yml`'s "No `.Warn(` log calls" step. Either return an error (then the boundary logs it once) or log INFO/DEBUG. See README §"Logging — two levels, no warnings".
-- Raw `c.Request.Body` to `CallOnPremise` — turns the handler into a transparent proxy with the technical-user authority. `svc.ProxyHandler` is the one place this exists, gated behind `ginpingo.RequireScope`.
+- Raw `c.Request.Body` to `CallOnPremise` — turns the handler into a transparent proxy with the technical-user authority. `ginpingo.ProxyHandler` is the one place this exists, gated behind `ginpingo.RequireScope`.
 - A new destination-name string literal in `examples/**/*.go` outside the rewriter's scope — `apply-config` will not catch it on the fork's run, every endpoint will 502.
 - `redirect-uris` non-empty in `xs-security.json` — **gated** by `template-guards.yml`'s "xs-security.json redirect-uris must stay empty" step. Edit-update-restore is per-deploy only; never commit. See README §5a.
 - A token-checking middleware that enforces `iss` against `xsuaa.URL` — XSUAA emits a SAP-internal `iss` literal (`http://<zone>.localhost:8080/uaa/oauth/token`), not a public URL. Issuer is intentionally not enforced; signature + audience + expiry are. See `btpingo`'s `auth.go`.

@@ -171,12 +171,12 @@ jobs:
           # OnPremMutator, JWTValidator) — never through the concrete
           # *btpingo.Service. An exception is cmd/server/main.go's
           # construction seam, where main() calls btpingo.NewService and
-          # then binds svc.ProxyHandler before handing it into
-          # buildRouter. No other file should mention *btpingo.Service.
+          # then hands svc into buildRouter as OnPremCaller / OnPremMutator.
+          # No other file should mention *btpingo.Service.
           #
           # The allow-list below scopes the match to handler-ish
           # locations; *btpingo.Service in cmd/server/main.go is allowed
-          # (construction + passing a method value), but not in
+          # (construction only), but not in
           # examples/ or in other cmd/* dirs.
           if rg -n --hidden --no-ignore-vcs \
               --glob '!cmd/server/main.go' \

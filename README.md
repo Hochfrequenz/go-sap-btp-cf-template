@@ -8,7 +8,7 @@ Fork it, fill in one `config.yml`, `cf push` and you get a production-grade Go b
 | Layer                | What you get                                                                                                                                                                                                      |
 | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Runtime**          | [Gin](https://github.com/gin-gonic/gin) HTTP server with graceful shutdown and structured (`slog`) logging                                                                                                        |
-| **Authentication**   | XSUAA JWT validation (RS256 signature, audience, expiry) via JWKS — see [`btpingo`'s `auth.go`](https://github.com/hochfrequenz/btpingo/blob/main/auth.go)                                                        |
+| **Authentication**   | XSUAA JWT validation (RS256 signature, audience, expiry) via JWKS — see [`btpingo`'s `auth.go`](https://github.com/hochfrequenz/btpingo/blob/v0.1.0/auth.go)                                                      |
 | **SAP connectivity** | Three-leg dance (XSUAA → Destination service → Connectivity proxy → Cloud Connector) with pluggable `DestinationAuthenticator` (ships `NoAuthentication` + `BasicAuthentication`; Principal Propagation plugs in) |
 | **CSRF on writes**   | Automatic fetch → attach → retry; one `svc.CallOnPremiseMutating(…)` call                                                                                                                                         |
 | **Typed handlers**   | Two demo endpoints (`GET /api/adt-discovery`, `POST /api/adt-checkrun`) with request validation, typed responses, and one-method-fake tests                                                                       |
@@ -224,10 +224,10 @@ func Handler(svc btpingo.OnPremCaller) gin.HandlerFunc {
 ```
 
 The template does **not** ship a transparent-proxy route by default - strict typing at the Gin boundary needs a fixed endpoint set, and the security story is much better when every path is explicit.
-If a fork genuinely wants a catch-all pass-through, `svc.ProxyHandler` is still a function in `ginpingo` taking `*btpingo.Service`; wire it yourself, gate it with `ginpingo.RequireScope("...User")`, and be deliberate about which users can reach it.
+If a fork genuinely wants a catch-all pass-through, `ginpingo.ProxyHandler(svc)` (taking `*btpingo.Service`) still exists; wire it yourself, gate it with `ginpingo.RequireScope("...User")`, and be deliberate about which users can reach it.
 **For anything that writes state on the SAP side, read the next sub-section first** - validation-before-SAP is how you keep on-prem Short Dumps out of your life.
 
-Unit-test the handler with the fixtures in [`btpingo`'s `service_test.go`](https://github.com/hochfrequenz/btpingo/blob/main/service_test.go); they stand up stubs that respond like the real XSUAA / Destination / CC stack, so you can assert request shape and response translation without deploying.
+Unit-test the handler with a one-method fake of `btpingo.OnPremCaller` / `btpingo.OnPremMutator` in its own `handler_test.go` (pattern: [`examples/invoicesync/handler_test.go`](examples/invoicesync/handler_test.go)); `btpingo`'s stubs of the XSUAA / Destination / CC stack live in its unexported `internal/testkit` and cannot be imported.
 
 ---
 
@@ -258,7 +258,7 @@ For shape-checks beyond the tag language, add a `Validate()` method on the reque
 
 > [!TIP]
 > **Do not fool around with raw byte slices.**
-> The raw-forward pattern - reading `c.Request.Body` and piping it straight into `svc.CallOnPremise` - is what `svc.ProxyHandler` does and why the template does not wire that route by default (see previous sub-section).
+> The raw-forward pattern - reading `c.Request.Body` and piping it straight into `svc.CallOnPremise` - is what `ginpingo.ProxyHandler` does and why the template does not wire that route by default (see previous sub-section).
 > For every endpoint you write: unmarshal into a typed struct using the [model binding which Gin provides you](https://gin-gonic.com/en/docs/binding/binding-and-validation/), validate via struct tags (or an explicit `Validate()`), marshal the ABAP-side shape yourself, and - if SAP returns XML - parse it back into Go structs and emit JSON, the way `examples/adtcheckrun/` and `examples/adtdiscovery/` do. `[]byte` and `json.RawMessage` that travel to `svc.CallOnPremise` unchecked are how SAP ends up with Short Dumps and how you end up debugging across three layers at 23:00.
 
 Two things to apply the same discipline to, that are easy to forget:
@@ -312,7 +312,7 @@ The **underlying `err`** goes to `slog.ErrorContext` server-side with the status
 
 One exception where it's safe (and useful) to pass `err.Error()` as the user message: `go-playground/validator` errors from `c.ShouldBindJSON`. Those messages describe struct-tag violations that the client caused and needs to fix.
 
-Canonical codes live in [`btpingo`'s `httperr.go`](https://github.com/hochfrequenz/btpingo/blob/main/httperr.go) (`CodeInvalidRequest`, `CodeUnauthorized`, `CodeForbidden`, `CodeNotFound`, `CodeMethodNotAllowed`, `CodeRequestTooLarge`, `CodeUpstreamUnreachable`, `CodeInternal`); declare your own `ErrorCode` constants if you need more. Failure-classification helpers live in [`btpingo`'s `classifier.go`](https://github.com/hochfrequenz/btpingo/blob/main/classifier.go) and [`non2xx_detail.go`](https://github.com/hochfrequenz/btpingo/blob/main/non2xx_detail.go).
+Canonical codes live in [`btpingo`'s `httperr.go`](https://github.com/hochfrequenz/btpingo/blob/v0.1.0/httperr.go) (`CodeInvalidRequest`, `CodeUnauthorized`, `CodeForbidden`, `CodeNotFound`, `CodeMethodNotAllowed`, `CodeRequestTooLarge`, `CodeUpstreamUnreachable`, `CodeInternal`); declare your own `ErrorCode` constants if you need more. Failure-classification helpers live in [`btpingo`'s `classifier.go`](https://github.com/hochfrequenz/btpingo/blob/v0.1.0/classifier.go) and [`non2xx_detail.go`](https://github.com/hochfrequenz/btpingo/blob/v0.1.0/non2xx_detail.go).
 
 ---
 
@@ -376,7 +376,7 @@ What `CallOnPremiseMutating` does behind the scenes:
 The request body is buffered up-front so the retry can re-read it. For bodies too large to buffer, write your own handshake on top of `CallOnPremise`.
 
 For handler tests, depend on the narrow `btpingo.OnPremMutator` interface (same shape as `OnPremCaller`, single method `CallOnPremiseMutating`) and substitute a one-method fake.
-The CSRF logic is the service's concern, already tested in [`btpingo`'s `service_csrf_test.go`](https://github.com/hochfrequenz/btpingo/blob/main/service_csrf_test.go).
+The CSRF logic is the service's concern, already tested in [`btpingo`'s `service_csrf_test.go`](https://github.com/hochfrequenz/btpingo/blob/v0.1.0/service_csrf_test.go).
 Handlers that mix reads and writes declare a composite interface at the usage site:
 
 ```go
@@ -402,7 +402,7 @@ If you're coming from Java or ABAP, the rules are probably tighter than you're u
 
 Enforcement: `.github/workflows/template-guards.yml` greps the tree for `.Warn(` and fails CI on any hit. A new PR that reintroduces warnings is blocked at merge; the error message points back to this section.
 
-Local debugging: set `LOG_LEVEL=debug` before running the server to see `DEBUG`-level lines (e.g. client-disconnect details from `Service.ProxyHandler`). `INFO` is the production default; `ERROR` is available for low-noise deployments.
+Local debugging: set `LOG_LEVEL=debug` before running the server to see `DEBUG`-level lines (e.g. client-disconnect details from `ginpingo.ProxyHandler`). `INFO` is the production default; `ERROR` is available for low-noise deployments.
 
 ---
 
@@ -532,7 +532,7 @@ The full test file shows three cases worth copying into your own handler tests:
 2. **Validation fails before SAP** — an invalid payload must 400 **without ever calling `CallOnPremise`** (the test asserts the fake was not invoked).
 3. **On-prem error surfaces as 502** — when the fake returns an error, the handler responds 502, not 500.
 
-If you need to exercise the three-leg token dance end-to-end (destination lookup + XSUAA client_credentials + Connectivity token + Cloud Connector proxy), the heavier `httptest.NewServer` pattern is in [`btpingo`'s `service_test.go`](https://github.com/hochfrequenz/btpingo/blob/main/service_test.go); fakes for your own handler tests live next to each example handler in `examples/*/handler_test.go`, not in an importable `btpingo/internal/testkit` — that package is unexported by design.
+If you need to exercise the three-leg token dance end-to-end (destination lookup + XSUAA client_credentials + Connectivity token + Cloud Connector proxy), the heavier `httptest.NewServer` pattern is in [`btpingo`'s `service_test.go`](https://github.com/hochfrequenz/btpingo/blob/v0.1.0/service_test.go); fakes for your own handler tests live next to each example handler in `examples/*/handler_test.go`, not in an importable `btpingo/internal/testkit` — that package is unexported by design.
 For everyday handler work the interface-plus-fake pattern above is faster and more targeted.
 
 ---

@@ -185,7 +185,7 @@ func logLevelFromEnv() slog.Level {
 // into a tunnel that carries the destination's technical-user
 // authority to any authenticated BTP caller. The template ships
 // without such a route; forks that genuinely need one should wire
-// `svc.ProxyHandler` themselves, gated behind `ginpingo.RequireScope`.
+// `ginpingo.ProxyHandler(svc)` themselves, gated behind `ginpingo.RequireScope`.
 func buildRouter(authMW gin.HandlerFunc, caller btpingo.OnPremCaller, mutator btpingo.OnPremMutator, logger *slog.Logger) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
