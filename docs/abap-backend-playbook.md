@@ -101,7 +101,7 @@ Do: treat a lint run as a lint run. A test has run only when it has run on a rea
 
 **A headless ABAP runtime in CI is red where SAP is green, or the other way round.**
 Cause: a non-SAP headless ABAP runtime running in CI can execute ABAP Unit and a real syntax check, which is a stronger signal than abaplint's parse-only pass above — but it is still not the target system: no SAP_BASIS release under test, no kernel patch level, no add-ons. A gap between that runtime and a real system shows up as a run that is red in CI and green on SAP, or the other way round.
-Do: pin the runtime's version so a result is reproducible, and let individual red tests report without gating a merge; a red result there is more likely a gap in the runtime than in your code. Still fail the job when the run itself is broken (setup failed, no test found, none green), or a report-only check turns into an always-green one.
+Do: pin the runtime's version so a result is reproducible, and let individual red tests report without gating a merge; a red result there is more likely a gap in the runtime than in your code. Still fail the job when the run itself is broken (setup failed, no test found, or not a single test green: a runtime that normally runs most of your tests passing none of them points at the run, not at every test at once), or a report-only check turns into an always-green one.
 
 ### Syntax floor and compile traps
 
