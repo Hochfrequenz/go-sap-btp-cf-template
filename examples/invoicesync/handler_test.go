@@ -15,17 +15,19 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 
+	"github.com/hochfrequenz/btpingo"
+	"github.com/hochfrequenz/btpingo/ginpingo"
+
 	"github.com/hochfrequenz/go-sap-btp-cf-template/examples/invoicesync"
-	"github.com/hochfrequenz/go-sap-btp-cf-template/internal/btp"
 )
 
 // fakeOnPrem is the canonical handler-test double: a one-method fake
-// satisfying btp.OnPremCaller. It records the arguments the handler
+// satisfying btpingo.OnPremCaller. It records the arguments the handler
 // passed (so the test can assert request shape) and returns a canned
 // response (so the test can assert response translation). Nothing
 // about XSUAA, Destination, or the Cloud Connector is exercised —
 // those layers are Service's concern and already tested in
-// internal/btp/service_test.go.
+// btpingo's service_test.go.
 type fakeOnPrem struct {
 	// captured inputs
 	gotDest   string
@@ -53,7 +55,7 @@ func (f *fakeOnPrem) CallOnPremise(_ context.Context, dest, method, path string,
 // cannot panic without it.
 func stubJWTClaims(claims jwt.MapClaims) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		c.Set("jwtClaims", claims)
+		c.Set(ginpingo.ClaimsContextKey, claims)
 		c.Next()
 	}
 }
@@ -134,9 +136,9 @@ func Test_Handler_RejectsInvalidPayloadBeforeTouchingSAP(t *testing.T) {
 	// Envelope shape: { "error": { "code": "invalid_request", "message": "..." } }.
 	// Validator messages are safe to surface, so we only pin code + presence
 	// of a non-empty message.
-	var env btp.ErrorEnvelope
+	var env btpingo.ErrorEnvelope
 	then.AssertThat(t, json.Unmarshal(w.Body.Bytes(), &env), is.Nil())
-	then.AssertThat(t, env.Error.Code, is.EqualTo(btp.CodeInvalidRequest))
+	then.AssertThat(t, env.Error.Code, is.EqualTo(btpingo.CodeInvalidRequest))
 	then.AssertThat(t, env.Error.Message != "", is.True())
 }
 
@@ -157,9 +159,9 @@ func Test_Handler_SurfacesSAPErrorAs502(t *testing.T) {
 	then.AssertThat(t, w.Code, is.EqualTo(http.StatusBadGateway))
 
 	// Typed envelope, stable code, stable message.
-	var env btp.ErrorEnvelope
+	var env btpingo.ErrorEnvelope
 	then.AssertThat(t, json.Unmarshal(w.Body.Bytes(), &env), is.Nil())
-	then.AssertThat(t, env.Error.Code, is.EqualTo(btp.CodeUpstreamUnreachable))
+	then.AssertThat(t, env.Error.Code, is.EqualTo(btpingo.CodeUpstreamUnreachable))
 	then.AssertThat(t, env.Error.Message, is.EqualTo("on-premise call failed"))
 
 	// No leakage: the raw Go error text must never appear in the

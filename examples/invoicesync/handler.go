@@ -26,7 +26,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 
-	"github.com/hochfrequenz/go-sap-btp-cf-template/internal/btp"
+	"github.com/hochfrequenz/btpingo"
+	"github.com/hochfrequenz/btpingo/ginpingo"
 )
 
 // Request is the typed view of the JSON body. Every field is validated
@@ -43,16 +44,16 @@ type Request struct {
 // Register attaches the /invoice-sync endpoint to the JWT-guarded `api`
 // group. Call this from cmd/server/main.go's buildRouter alongside the
 // other route registrations.
-func Register(api *gin.RouterGroup, svc btp.OnPremCaller) {
+func Register(api *gin.RouterGroup, svc btpingo.OnPremCaller) {
 	api.POST("/invoice-sync", Handler(svc))
 }
 
 // Handler is the actual request handler. Depends on the narrow
-// btp.OnPremCaller interface, not on the concrete Service type, so
+// btpingo.OnPremCaller interface, not on the concrete Service type, so
 // unit tests substitute a one-method fake without needing to stand
 // up the XSUAA / Destination / Cloud Connector stack. See
 // handler_test.go in this package for the canonical mock pattern.
-func Handler(svc btp.OnPremCaller) gin.HandlerFunc {
+func Handler(svc btpingo.OnPremCaller) gin.HandlerFunc {
 	// FORK: "HF_S4" is the name of Hochfrequenz's on-prem destination.
 	// apply-config rewrites this literal across examples/**/*.go via
 	// `examples.destination_name` in config.yml — change config.yml,
@@ -68,7 +69,7 @@ func Handler(svc btp.OnPremCaller) gin.HandlerFunc {
 		// case where including the underlying text is the right call.
 		var req Request
 		if err := c.ShouldBindJSON(&req); err != nil {
-			btp.AbortError(c, http.StatusBadRequest, btp.CodeInvalidRequest,
+			ginpingo.AbortError(c, http.StatusBadRequest, btpingo.CodeInvalidRequest,
 				err.Error(), nil)
 			return
 		}
@@ -76,7 +77,7 @@ func Handler(svc btp.OnPremCaller) gin.HandlerFunc {
 		// Claims — read the authenticated user for the audit log.
 		// The middleware has already signature- and audience-validated
 		// the JWT; `user_name` is the canonical XSUAA user claim.
-		claims := c.MustGet("jwtClaims").(jwt.MapClaims)
+		claims := c.MustGet(ginpingo.ClaimsContextKey).(jwt.MapClaims)
 		userName, _ := claims["user_name"].(string)
 		slog.InfoContext(c.Request.Context(), "invoice-sync requested",
 			"user", userName, "company_code", req.CompanyCode)
@@ -98,7 +99,7 @@ func Handler(svc btp.OnPremCaller) gin.HandlerFunc {
 			// Upstream (SAP / Cloud Connector) failures are logged with
 			// full detail on the server side; the client just sees a
 			// stable "upstream_unreachable" code and can retry on that.
-			btp.AbortError(c, http.StatusBadGateway, btp.CodeUpstreamUnreachable,
+			ginpingo.AbortError(c, http.StatusBadGateway, btpingo.CodeUpstreamUnreachable,
 				"on-premise call failed", err)
 			return
 		}

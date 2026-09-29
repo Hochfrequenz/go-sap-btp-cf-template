@@ -23,7 +23,7 @@
 //   - The destination name and SAP path are hard-coded at the
 //     route registration site (Register below), not taken from
 //     the request — no path or destination injection surface.
-//   - Depends on the narrow btp.OnPremCaller interface so the
+//   - Depends on the narrow btpingo.OnPremCaller interface so the
 //     unit test uses a one-method fake.
 package adtdiscovery
 
@@ -36,7 +36,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/hochfrequenz/go-sap-btp-cf-template/internal/btp"
+	"github.com/hochfrequenz/btpingo"
 )
 
 // Response is the JSON shape the handler returns to the caller.
@@ -83,7 +83,7 @@ type DiscoveryOutput struct {
 // pattern. huma generates the OpenAPI operation, request/response
 // schemas, and the Swagger UI entry from the function signature
 // alone.
-func Register(api huma.API, svc btp.OnPremCaller) {
+func Register(api huma.API, svc btpingo.OnPremCaller) {
 	huma.Register(api, huma.Operation{
 		OperationID: "adt-discovery",
 		Method:      http.MethodGet,
@@ -103,7 +103,7 @@ func Register(api huma.API, svc btp.OnPremCaller) {
 // all. Errors surface as huma's status-typed errors (502 with the
 // huma error model); the SAP-side Go error is captured for
 // operator-side context.
-func Handler(svc btp.OnPremCaller) func(context.Context, *DiscoveryInput) (*DiscoveryOutput, error) {
+func Handler(svc btpingo.OnPremCaller) func(context.Context, *DiscoveryInput) (*DiscoveryOutput, error) {
 	// FORK: "HF_S4" is the name of Hochfrequenz's on-prem destination.
 	// apply-config rewrites this literal across examples/**/*.go via
 	// `examples.destination_name` in config.yml — change config.yml,
@@ -126,7 +126,7 @@ func Handler(svc btp.OnPremCaller) func(context.Context, *DiscoveryInput) (*Disc
 			// context); surface only the safe, classified detail (client
 			// contract). The kind also lands in slog so operators can
 			// grep / aggregate by it.
-			kind, detail := btp.ClassifyOnPremError(err)
+			kind, detail := btpingo.ClassifyOnPremError(err)
 			slog.ErrorContext(ctx, "adt-discovery on-premise call failed",
 				"kind", kind, "err", err)
 			return nil, huma.Error502BadGateway(detail)
@@ -136,7 +136,7 @@ func Handler(svc btp.OnPremCaller) func(context.Context, *DiscoveryInput) (*Disc
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			slog.ErrorContext(ctx, "adt-discovery on-premise non-2xx",
 				"status", resp.StatusCode)
-			return nil, huma.Error502BadGateway(btp.OnPremNon2xxDetail(resp.StatusCode))
+			return nil, huma.Error502BadGateway(btpingo.OnPremNon2xxDetail(resp.StatusCode))
 		}
 
 		raw, err := io.ReadAll(resp.Body)

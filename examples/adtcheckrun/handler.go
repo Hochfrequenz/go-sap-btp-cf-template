@@ -7,9 +7,9 @@
 //
 // Template discipline kept across this handler:
 //
-//   - btp.OnPremMutator dependency, not concrete Service type —
+//   - btpingo.OnPremMutator dependency, not concrete Service type —
 //     handler tests use a one-method fake. CSRF handshake is the
-//     Service's concern, tested in internal/btp/service_csrf_test.go.
+//     Service's concern, tested in btpingo's service_csrf_test.go.
 //   - Destination + SAP path hard-coded at Register time — no
 //     path or destination injection.
 //   - go-playground/validator tag on ObjectURI keeps a malformed
@@ -36,7 +36,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 
-	"github.com/hochfrequenz/go-sap-btp-cf-template/internal/btp"
+	"github.com/hochfrequenz/btpingo"
+	"github.com/hochfrequenz/btpingo/ginpingo"
 )
 
 // Request is the typed view of the JSON body. The ObjectURI tag
@@ -83,7 +84,7 @@ type Message struct {
 // Register attaches POST /adt-checkrun to the JWT-guarded api group.
 // The destination name and SAP path are closed over in the handler
 // — this is a constrained-proxy route, not a transparent one.
-func Register(api *gin.RouterGroup, svc btp.OnPremMutator) {
+func Register(api *gin.RouterGroup, svc btpingo.OnPremMutator) {
 	api.POST("/adt-checkrun", Handler(svc))
 }
 
@@ -94,7 +95,7 @@ func Register(api *gin.RouterGroup, svc btp.OnPremMutator) {
 //  3. Call svc.CallOnPremiseMutating — which runs the CSRF dance.
 //  4. Read the SAP XML response and decode into CheckRunReports.
 //  5. Translate to the JSON-shaped Response and return.
-func Handler(svc btp.OnPremMutator) gin.HandlerFunc {
+func Handler(svc btpingo.OnPremMutator) gin.HandlerFunc {
 	// FORK: "HF_S4" is the name of Hochfrequenz's on-prem destination.
 	// apply-config rewrites this literal across examples/**/*.go via
 	// `examples.destination_name` in config.yml — change config.yml,
@@ -109,12 +110,12 @@ func Handler(svc btp.OnPremMutator) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req Request
 		if err := c.ShouldBindJSON(&req); err != nil {
-			btp.AbortError(c, http.StatusBadRequest, btp.CodeInvalidRequest,
+			ginpingo.AbortError(c, http.StatusBadRequest, btpingo.CodeInvalidRequest,
 				err.Error(), nil)
 			return
 		}
 
-		claims := c.MustGet("jwtClaims").(jwt.MapClaims)
+		claims := c.MustGet(ginpingo.ClaimsContextKey).(jwt.MapClaims)
 		userName, _ := claims["user_name"].(string)
 		slog.InfoContext(c.Request.Context(), "adt check-run requested",
 			"user", userName, "object", req.ObjectURI)
@@ -134,28 +135,28 @@ func Handler(svc btp.OnPremMutator) gin.HandlerFunc {
 			bytes.NewReader(body),
 		)
 		if err != nil {
-			btp.AbortError(c, http.StatusBadGateway, btp.CodeUpstreamUnreachable,
+			ginpingo.AbortError(c, http.StatusBadGateway, btpingo.CodeUpstreamUnreachable,
 				"on-premise call failed", err)
 			return
 		}
 		defer func() { _ = resp.Body.Close() }()
 
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			btp.AbortError(c, http.StatusBadGateway, btp.CodeUpstreamUnreachable,
-				btp.OnPremNon2xxDetail(resp.StatusCode), nil)
+			ginpingo.AbortError(c, http.StatusBadGateway, btpingo.CodeUpstreamUnreachable,
+				btpingo.OnPremNon2xxDetail(resp.StatusCode), nil)
 			return
 		}
 
 		raw, err := io.ReadAll(resp.Body)
 		if err != nil {
-			btp.AbortError(c, http.StatusBadGateway, btp.CodeUpstreamUnreachable,
+			ginpingo.AbortError(c, http.StatusBadGateway, btpingo.CodeUpstreamUnreachable,
 				"reading on-premise response body failed", err)
 			return
 		}
 
 		var reports checkRunReports
 		if err := xml.Unmarshal(raw, &reports); err != nil {
-			btp.AbortError(c, http.StatusBadGateway, btp.CodeUpstreamUnreachable,
+			ginpingo.AbortError(c, http.StatusBadGateway, btpingo.CodeUpstreamUnreachable,
 				"parsing on-premise check-run response failed", err)
 			return
 		}

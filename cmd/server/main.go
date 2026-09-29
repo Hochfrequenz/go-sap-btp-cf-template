@@ -22,16 +22,18 @@ import (
 	"github.com/danielgtaylor/huma/v2/adapters/humagin"
 	"github.com/gin-gonic/gin"
 
+	"github.com/hochfrequenz/btpingo"
+	"github.com/hochfrequenz/btpingo/ginpingo"
+
 	"github.com/hochfrequenz/go-sap-btp-cf-template/examples/adtcheckrun"
 	"github.com/hochfrequenz/go-sap-btp-cf-template/examples/adtdiscovery"
-	"github.com/hochfrequenz/go-sap-btp-cf-template/internal/btp"
 )
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevelFromEnv()}))
 	slog.SetDefault(logger)
 
-	env, err := btp.LoadEnv()
+	env, err := btpingo.LoadEnv()
 	if err != nil {
 		logger.Error("cloud foundry environment not available; refusing to start", "err", err)
 		os.Exit(1)
@@ -40,19 +42,19 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	validator, err := btp.NewJWTValidator(ctx, env.XSUAA)
+	validator, err := btpingo.NewJWTValidator(ctx, env.XSUAA)
 	if err != nil {
 		logger.Error("xsuaa jwt validator init failed", "err", err)
 		os.Exit(1)
 	}
 
-	svc, err := btp.NewService(env, btp.WithUserAgent(buildUserAgent()))
+	svc, err := btpingo.NewService(env, btpingo.WithUserAgent(buildUserAgent()))
 	if err != nil {
 		logger.Error("btp service init failed", "err", err)
 		os.Exit(1)
 	}
 
-	r := buildRouter(validator.Middleware(), svc, svc, logger)
+	r := buildRouter(ginpingo.JWT(validator), svc, svc, logger)
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -76,7 +78,7 @@ func main() {
 	// ~5 minutes per leg.
 	//
 	// 900s (15 minutes) is intentionally HIGHER than the 10-minute
-	// btp.DefaultOnPremiseTimeout. WriteTimeout is one budget covering
+	// btpingo.DefaultOnPremiseTimeout. WriteTimeout is one budget covering
 	// the *whole* handler run (CSRF handshake leg + main on-prem POST +
 	// response write); the on-prem client timeout is a budget per call.
 	// Setting WriteTimeout = on-prem-timeout would let WriteTimeout race
@@ -170,7 +172,7 @@ func logLevelFromEnv() slog.Level {
 }
 
 // buildRouter wires the Gin router from its abstract dependencies —
-// NOT from *btp.Service directly. Handlers added here are testable
+// NOT from *btpingo.Service directly. Handlers added here are testable
 // with a one-method fake (see examples/*_test.go) and decoupled from
 // any internal btp refactor.
 //
@@ -183,8 +185,8 @@ func logLevelFromEnv() slog.Level {
 // into a tunnel that carries the destination's technical-user
 // authority to any authenticated BTP caller. The template ships
 // without such a route; forks that genuinely need one should wire
-// `svc.ProxyHandler` themselves, gated behind `btp.RequireScope`.
-func buildRouter(authMW gin.HandlerFunc, caller btp.OnPremCaller, mutator btp.OnPremMutator, logger *slog.Logger) *gin.Engine {
+// `ginpingo.ProxyHandler(svc)` themselves, gated behind `ginpingo.RequireScope`.
+func buildRouter(authMW gin.HandlerFunc, caller btpingo.OnPremCaller, mutator btpingo.OnPremMutator, logger *slog.Logger) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
 	// The backend app is directly reachable on its .cfapps.* route, not
@@ -194,7 +196,7 @@ func buildRouter(authMW gin.HandlerFunc, caller btp.OnPremCaller, mutator btp.On
 	_ = r.SetTrustedProxies(nil)
 	// Middleware order matters. Outermost is recoverPanic — its deferred
 	// recover() must wrap every other handler so a panic anywhere in the
-	// chain lands in the typed btp.ErrorEnvelope path. RequestID next so
+	// chain lands in the typed btpingo.ErrorEnvelope path. RequestID next so
 	// the access log and any AbortError envelope share the ID. MaxBodySize
 	// sits before any handler that reads the body — an oversized payload
 	// fails fast with a typed 413 rather than reaching the Gin binder
@@ -204,8 +206,8 @@ func buildRouter(authMW gin.HandlerFunc, caller btp.OnPremCaller, mutator btp.On
 	// it.
 	r.Use(
 		recoverPanic(),
-		btp.RequestID(),
-		btp.MaxBodySize(btp.DefaultMaxBodyBytes),
+		ginpingo.RequestID(),
+		ginpingo.MaxBodySize(ginpingo.DefaultMaxBodyBytes),
 		securityHeaders(),
 		requestLog(logger),
 	)
@@ -218,7 +220,7 @@ func buildRouter(authMW gin.HandlerFunc, caller btp.OnPremCaller, mutator btp.On
 	api := r.Group("/api")
 	api.Use(authMW)
 	api.GET("/me", func(c *gin.Context) {
-		claims, _ := c.Get("jwtClaims")
+		claims, _ := c.Get(ginpingo.ClaimsContextKey)
 		c.JSON(http.StatusOK, gin.H{"claims": claims})
 	})
 
@@ -261,7 +263,7 @@ func buildRouter(authMW gin.HandlerFunc, caller btp.OnPremCaller, mutator btp.On
 }
 
 // buildUserAgent derives a traceable User-Agent from the compiled binary's
-// module path and version. Passing this through to btp.NewService means
+// module path and version. Passing this through to btpingo.NewService means
 // SAP-side access logs and oncall traces see "my-service/v1.2.3" rather
 // than the template's literal name — exactly the move each fork should
 // make. debug.ReadBuildInfo can fail for unusual build setups (test
@@ -276,11 +278,11 @@ func buildUserAgent() string {
 			return p + "/" + ver
 		}
 	}
-	return btp.DefaultUserAgent
+	return btpingo.DefaultUserAgent
 }
 
 // recoverPanic replaces gin.Recovery() so panic responses honour the
-// typed btp.ErrorEnvelope contract. Default gin.Recovery in ReleaseMode
+// typed btpingo.ErrorEnvelope contract. Default gin.Recovery in ReleaseMode
 // writes "Internal Server Error" as text/plain — a client that switches
 // on `error.code` gets undefined behaviour for panics. This emits the
 // same envelope shape every other error path uses.
@@ -291,7 +293,7 @@ func buildUserAgent() string {
 // one structured record per panic instead of two — one plain-text from
 // Gin and one structured from us.
 //
-// Note: by the time this fires, btp.RequestID() has already run (it is
+// Note: by the time this fires, ginpingo.RequestID() has already run (it is
 // installed inside this Recovery's deferred wrap) so the envelope and
 // the operator log line share the same request_id. A panic *before*
 // RequestID runs would surface with an empty request_id; that case is
@@ -302,7 +304,7 @@ func recoverPanic() gin.HandlerFunc {
 		// AbortError's slog line preserves both. The client never sees
 		// it — userMsg below is what reaches the wire.
 		err := fmt.Errorf("panic: %v\n%s", recovered, debug.Stack())
-		btp.AbortError(c, http.StatusInternalServerError, btp.CodeInternal,
+		ginpingo.AbortError(c, http.StatusInternalServerError, btpingo.CodeInternal,
 			"internal error", err)
 	})
 }
@@ -361,7 +363,7 @@ func requestLog(logger *slog.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
 		c.Next()
-		rid, _ := c.Get(btp.RequestIDContextKey)
+		rid, _ := c.Get(ginpingo.RequestIDContextKey)
 		ridStr, _ := rid.(string)
 		logger.Info("http",
 			"method", c.Request.Method,

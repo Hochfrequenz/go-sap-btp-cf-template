@@ -14,7 +14,7 @@ import (
 // maps onto a CF or XSUAA artifact is required; Validate() aggregates
 // all problems into a single error so the operator sees the whole
 // picture in one run instead of fixing one field at a time (same
-// aggregated-error pattern as internal/btp/env.go's Validate).
+// aggregated-error pattern as btpingo's env.go Validate).
 type Config struct {
 	App      AppConfig      `yaml:"app"`
 	Services ServicesConfig `yaml:"services"`

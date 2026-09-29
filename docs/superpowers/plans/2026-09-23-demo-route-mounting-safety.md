@@ -1,5 +1,7 @@
 # Demo-Route Mounting Safety (#125) Implementation Plan
 
+> **Superseded detail:** the shipped `buildRouter` takes the auth middleware as a `gin.HandlerFunc` (`main` passes `ginpingo.JWT(validator)` since the switch to btpingo, #130), not a `routeGuard` interface; the fork-chores `rg` pattern is anchored to non-comment lines (`^\s*(adtdiscovery|adtcheckrun)\.Register\(`). The rest of this document is the original design record.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add a route-table allow-list test that fails CI when an unexpected route is mounted on the router, plus a README signpost row + gate entry, so a fork consciously decides to mount demo routes rather than inheriting them silently.

@@ -8,11 +8,11 @@ Fork it, fill in one `config.yml`, `cf push` and you get a production-grade Go b
 | Layer                | What you get                                                                                                                                                                                                      |
 | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Runtime**          | [Gin](https://github.com/gin-gonic/gin) HTTP server with graceful shutdown and structured (`slog`) logging                                                                                                        |
-| **Authentication**   | XSUAA JWT validation (RS256 signature, audience, expiry) via JWKS — see [`internal/btp/auth.go`](internal/btp/auth.go)                                                                                            |
+| **Authentication**   | XSUAA JWT validation (RS256 signature, audience, expiry) via JWKS — see [`btpingo`'s `auth.go`](https://github.com/hochfrequenz/btpingo/blob/v0.1.0/auth.go)                                                      |
 | **SAP connectivity** | Three-leg dance (XSUAA → Destination service → Connectivity proxy → Cloud Connector) with pluggable `DestinationAuthenticator` (ships `NoAuthentication` + `BasicAuthentication`; Principal Propagation plugs in) |
 | **CSRF on writes**   | Automatic fetch → attach → retry; one `svc.CallOnPremiseMutating(…)` call                                                                                                                                         |
 | **Typed handlers**   | Two demo endpoints (`GET /api/adt-discovery`, `POST /api/adt-checkrun`) with request validation, typed responses, and one-method-fake tests                                                                       |
-| **Error envelope**   | `btp.AbortError` + stable JSON error shape with request IDs                                                                                                                                                       |
+| **Error envelope**   | `ginpingo.AbortError` + stable JSON error shape with request IDs                                                                                                                                                  |
 | **CI / CD**          | GitHub Actions pipeline: lint, test, template-guards, `cf push` to Cloud Foundry                                                                                                                                  |
 | **Fork tooling**     | `go run ./cmd/apply-config` rewrites module path, app name, CF coordinates, and destination names from `config.yml` — one command, whole tree                                                                     |
 
@@ -61,17 +61,6 @@ flowchart LR
 
 ```
 cmd/server/main.go          Gin entry point; graceful shutdown; structured logs
-internal/btp/
-  env.go                    typed VCAP_SERVICES parsing + eager validation
-  tokens.go                 XSUAA client-credentials fetcher (TTL cache, singleflight)
-  destination.go            Destination-service lookup + typed AuthType/ProxyType
-  proxy.go                  http.RoundTripper tunnelling via Connectivity proxy
-  auth.go                   XSUAA JWT middleware (signature, aud, exp; see doc)
-  authenticator.go          pluggable DestinationAuthenticator registry
-  doc.go                    library-intent surface list (what forks may depend on)
-  httperr.go                typed error envelope + AbortError helper
-  middleware.go             RequestID + RequireScope helpers
-  service.go                orchestrates the three-leg call + CSRF handshake for writes
 web/                        SAP approuter
   package.json              pulls @sap/approuter
   xs-app.json               routes /api/* to the Go backend destination
@@ -80,6 +69,13 @@ xs-security.json            XSUAA app config
 Procfile, .cfignore
 vars.example.yml            template for cf push --vars-file vars.yml
 ```
+
+The BTP plumbing (XSUAA validation, Destination/Connectivity/Cloud Connector calls, the
+typed error envelope, CSRF handshake) used to live in `internal/btp/` here; since the
+`github.com/hochfrequenz/btpingo` extraction it is an external dependency (`go.mod`), split into
+the framework-neutral `btpingo` package and its Gin adapters in `btpingo/ginpingo`. The
+library-intent surface is documented at [pkg.go.dev/github.com/hochfrequenz/btpingo](https://pkg.go.dev/github.com/hochfrequenz/btpingo)
+(`doc.go`) and [.../ginpingo](https://pkg.go.dev/github.com/hochfrequenz/btpingo/ginpingo).
 
 ## Using this repo as a template
 
@@ -196,15 +192,15 @@ type Request struct {
     // ... more fields with validation tags
 }
 
-func Handler(svc btp.OnPremCaller) gin.HandlerFunc {
+func Handler(svc btpingo.OnPremCaller) gin.HandlerFunc {
     return func(c *gin.Context) {
         var req Request
         if err := c.ShouldBindJSON(&req); err != nil {            // step 2: validate
-            btp.AbortError(c, http.StatusBadRequest, btp.CodeInvalidRequest,
+            ginpingo.AbortError(c, http.StatusBadRequest, btpingo.CodeInvalidRequest,
                 err.Error(), nil)                                  //   validator messages are safe to surface
             return
         }
-        claims := c.MustGet("jwtClaims").(jwt.MapClaims)          // step 3: know the caller
+        claims := c.MustGet(ginpingo.ClaimsContextKey).(jwt.MapClaims) // step 3: know the caller
         _ = claims["user_name"]
 
         body, _ := json.Marshal(toABAPPayload(req))
@@ -215,7 +211,7 @@ func Handler(svc btp.OnPremCaller) gin.HandlerFunc {
             bytes.NewReader(body),
         )
         if err != nil {
-            btp.AbortError(c, http.StatusBadGateway, btp.CodeUpstreamUnreachable,
+            ginpingo.AbortError(c, http.StatusBadGateway, btpingo.CodeUpstreamUnreachable,
                 "on-premise call failed", err)                     //   err goes to the log, not the response body
             return
         }
@@ -228,10 +224,10 @@ func Handler(svc btp.OnPremCaller) gin.HandlerFunc {
 ```
 
 The template does **not** ship a transparent-proxy route by default - strict typing at the Gin boundary needs a fixed endpoint set, and the security story is much better when every path is explicit.
-If a fork genuinely wants a catch-all pass-through, `svc.ProxyHandler` is still a method on `*btp.Service`; wire it yourself, gate it with `btp.RequireScope("...User")`, and be deliberate about which users can reach it.
+If a fork genuinely wants a catch-all pass-through, `ginpingo.ProxyHandler(svc)` (taking `*btpingo.Service`) still exists; wire it yourself, gate it with `ginpingo.RequireScope("...User")`, and be deliberate about which users can reach it.
 **For anything that writes state on the SAP side, read the next sub-section first** - validation-before-SAP is how you keep on-prem Short Dumps out of your life.
 
-Unit-test the handler with the fixtures in `internal/btp/service_test.go`; they stand up stubs that respond like the real XSUAA / Destination / CC stack, so you can assert request shape and response translation without deploying.
+Unit-test the handler with a one-method fake of `btpingo.OnPremCaller` / `btpingo.OnPremMutator` in its own `handler_test.go` (pattern: [`examples/invoicesync/handler_test.go`](examples/invoicesync/handler_test.go)); `btpingo`'s stubs of the XSUAA / Destination / CC stack live in its unexported `internal/testkit` and cannot be imported.
 
 ---
 
@@ -262,7 +258,7 @@ For shape-checks beyond the tag language, add a `Validate()` method on the reque
 
 > [!TIP]
 > **Do not fool around with raw byte slices.**
-> The raw-forward pattern - reading `c.Request.Body` and piping it straight into `svc.CallOnPremise` - is what `svc.ProxyHandler` does and why the template does not wire that route by default (see previous sub-section).
+> The raw-forward pattern - reading `c.Request.Body` and piping it straight into `svc.CallOnPremise` - is what `ginpingo.ProxyHandler` does and why the template does not wire that route by default (see previous sub-section).
 > For every endpoint you write: unmarshal into a typed struct using the [model binding which Gin provides you](https://gin-gonic.com/en/docs/binding/binding-and-validation/), validate via struct tags (or an explicit `Validate()`), marshal the ABAP-side shape yourself, and - if SAP returns XML - parse it back into Go structs and emit JSON, the way `examples/adtcheckrun/` and `examples/adtdiscovery/` do. `[]byte` and `json.RawMessage` that travel to `svc.CallOnPremise` unchecked are how SAP ends up with Short Dumps and how you end up debugging across three layers at 23:00.
 
 Two things to apply the same discipline to, that are easy to forget:
@@ -272,7 +268,7 @@ Two things to apply the same discipline to, that are easy to forget:
 
 #### Body-size cap
 
-`cmd/server/main.go` installs `btp.MaxBodySize(btp.DefaultMaxBodyBytes)` (1 MiB) globally.
+`cmd/server/main.go` installs `ginpingo.MaxBodySize(ginpingo.DefaultMaxBodyBytes)` (1 MiB) globally.
 Any request whose `Content-Length` announces more, or that streams more under chunked / lying-Content-Length, is rejected with a typed `413` envelope (`code: "request_too_large"`) before reaching the Gin binder.
 The cap protects the app's 128 MiB CF memory quota from a single oversized POST.
 
@@ -280,7 +276,7 @@ For a route that legitimately needs more (large-file import, batch upload), inst
 
 ```go
 api.POST("/large-import",
-    btp.MaxBodySize(50<<20), // 50 MiB just for this route
+    ginpingo.MaxBodySize(50<<20), // 50 MiB just for this route
     importHandler)
 ```
 
@@ -293,10 +289,10 @@ To genuinely lift the cap on one route, structure that route under its own route
 ### Return errors with a stable envelope
 
 Raw `c.JSON(..., gin.H{"error": err.Error()})` is tempting and probably wrong because it leaks jwt/keyfunc internals, SAP response bodies, and stack-flavoured Go error text into the response the client reads.
-The template ships one helper (`btp.AbortError`) and one envelope shape, and every handler in the repo uses them:
+The template ships one helper (`ginpingo.AbortError`) and one envelope shape, and every handler in the repo uses them:
 
 ```go
-btp.AbortError(c, http.StatusBadGateway, btp.CodeUpstreamUnreachable,
+ginpingo.AbortError(c, http.StatusBadGateway, btpingo.CodeUpstreamUnreachable,
     "on-premise call failed", err)
 // Response body is always:
 // { "error": { "code": "upstream_unreachable", "message": "on-premise call failed", "request_id": "…" } }
@@ -309,37 +305,37 @@ The **underlying `err`** goes to `slog.ErrorContext` server-side with the status
 > **Two helpers turn the user-facing message into something diagnostic without leaking err details.**
 > Use them instead of a hand-written constant string when calling `svc.CallOnPremise` / `svc.CallOnPremiseMutating`:
 >
-> - **err path** — `kind, detail := btp.ClassifyOnPremError(err)` returns a typed `OnPremFailureKind` (`destination_not_found`, `response_too_large`, `timeout`, `canceled`, `transport_error`) plus a stable, client-safe detail string. Pass `detail` as the user message; log `kind` server-side so operators can filter / aggregate. See `examples/adtdiscovery/handler.go` for the canonical pattern.
-> - **non-2xx-from-SAP path** — `btp.OnPremNon2xxDetail(resp.StatusCode)` returns `"on-premise system returned HTTP <status>"`. Surfaces the SAP status to the client without leaking the response body. Used by both `examples/adtdiscovery/handler.go` (huma) and `examples/adtcheckrun/handler.go` (gin/`AbortError`).
+> - **err path** — `kind, detail := btpingo.ClassifyOnPremError(err)` returns a typed `OnPremFailureKind` (`destination_not_found`, `response_too_large`, `timeout`, `canceled`, `transport_error`) plus a stable, client-safe detail string. Pass `detail` as the user message; log `kind` server-side so operators can filter / aggregate. See `examples/adtdiscovery/handler.go` for the canonical pattern.
+> - **non-2xx-from-SAP path** — `btpingo.OnPremNon2xxDetail(resp.StatusCode)` returns `"on-premise system returned HTTP <status>"`. Surfaces the SAP status to the client without leaking the response body. Used by both `examples/adtdiscovery/handler.go` (huma) and `examples/adtcheckrun/handler.go` (gin/`AbortError`).
 >
-> The wire format of both helpers is part of the public API surface (see `internal/btp/doc.go`); changes require a CHANGELOG entry. Forks pinning the old constant strings in alert rules need to update.
+> The wire format of both helpers is part of `btpingo`'s public API surface (see [`doc.go`](https://pkg.go.dev/github.com/hochfrequenz/btpingo)); changes are called out in `btpingo`'s generated release notes (`gh release create --generate-notes`), not a hand-written CHANGELOG. Forks pinning the old constant strings in alert rules need to update when they bump the dependency.
 
 One exception where it's safe (and useful) to pass `err.Error()` as the user message: `go-playground/validator` errors from `c.ShouldBindJSON`. Those messages describe struct-tag violations that the client caused and needs to fix.
 
-Canonical codes live in [`internal/btp/httperr.go`](internal/btp/httperr.go) (`CodeInvalidRequest`, `CodeUnauthorized`, `CodeForbidden`, `CodeNotFound`, `CodeUpstreamUnreachable`, `CodeInternal`); declare your own `ErrorCode` constants if you need more. Failure-classification helpers live in [`internal/btp/classifier.go`](internal/btp/classifier.go) and [`internal/btp/non2xx_detail.go`](internal/btp/non2xx_detail.go).
+Canonical codes live in [`btpingo`'s `httperr.go`](https://github.com/hochfrequenz/btpingo/blob/v0.1.0/httperr.go) (`CodeInvalidRequest`, `CodeUnauthorized`, `CodeForbidden`, `CodeNotFound`, `CodeMethodNotAllowed`, `CodeRequestTooLarge`, `CodeUpstreamUnreachable`, `CodeInternal`); declare your own `ErrorCode` constants if you need more. Failure-classification helpers live in [`btpingo`'s `classifier.go`](https://github.com/hochfrequenz/btpingo/blob/v0.1.0/classifier.go) and [`non2xx_detail.go`](https://github.com/hochfrequenz/btpingo/blob/v0.1.0/non2xx_detail.go).
 
 ---
 
 ### Guard routes with scopes and correlate logs with a request ID
 
-The JWT middleware only checks signature, audience, and expiry.
+The JWT middleware checks signature, audience and the time claims: `exp` (required), `nbf`, and `iat` (a token issued in the future, beyond the 30 s leeway, is rejected).
 It does **not** enforce scopes, because this MWE ships no scope-gated route.
-The moment you add one, use `btp.RequireScope(...)` rather than reading the `scope` claim by hand: the helper does exact-match (no `strings.Contains` trap where `Unauthorized-User` would match `User`) and produces the same 403 envelope as every other error in the repo.
+The moment you add one, use `ginpingo.RequireScope(...)` rather than reading the `scope` claim by hand: the helper does exact-match (no `strings.Contains` trap where `Unauthorized-User` would match `User`) and produces the same 403 envelope as every other error in the repo.
 
 ```go
 api := r.Group("/api")
-api.Use(validator.Middleware())                                // authn: valid JWT
+api.Use(ginpingo.JWT(validator))                                // authn: valid JWT
 api.GET("/admin",
-    btp.RequireScope("go-btp-mwe!t1234.Admin"),                // authz: exact-match qualified scope
+    ginpingo.RequireScope("go-btp-mwe!t1234.Admin"),           // authz: exact-match qualified scope
     adminHandler)
 ```
 
 > **XSUAA qualified-scope gotcha.** Real XSUAA tokens emit scopes as `<xsappname>!t<tenant>.<ScopeName>` (e.g. `go-btp-mwe!t1234.Admin`), NOT as a bare `"Admin"`. Pass the exact string you see in the token's `scope` claim — hit `/api/me` once after login and copy the shape from there. A bare scope name will 403 every request.
 
-`btp.RequestID()` sits higher on the middleware chain (it's already wired in `cmd/server/main.go`) and serves two purposes at once:
+`ginpingo.RequestID()` sits higher on the middleware chain (it's already wired in `cmd/server/main.go`) and serves two purposes at once:
 
 - The `X-Request-Id` on the response echoes the inbound header or a generated ID, so a client retrying a flaky call can quote "my call with request-id `abc123` failed" and oncall greps straight to the right log line.
-- The ID lands in the Gin context under `btp.RequestIDContextKey`. `btp.AbortError` picks it up automatically and the access log in `requestLog` emits it as a structured field, so every line related to one request shares one ID without any per-handler plumbing.
+- The ID lands in the Gin context under `ginpingo.RequestIDContextKey`. `ginpingo.AbortError` picks it up automatically and the access log in `requestLog` emits it as a structured field, so every line related to one request shares one ID without any per-handler plumbing.
 
 Two log layers, one rule each:
 
@@ -373,20 +369,20 @@ resp, err := svc.CallOnPremiseMutating(                   // not CallOnPremise
 
 What `CallOnPremiseMutating` does behind the scenes:
 
-1. **First call per destination** — GET the configured fetch path (default `/sap/bc/adt/discovery`; override with `btp.WithCSRFFetchPath` for non-ADT destinations) with `X-CSRF-Token: Fetch`. The returned token and any SAP session cookies (`SAP_SESSIONID_*`, `sap-usercontext`) are cached on the Service.
+1. **First call per destination** — GET the configured fetch path (default `/sap/bc/adt/discovery`; override with `btpingo.WithCSRFFetchPath` for non-ADT destinations) with `X-CSRF-Token: Fetch`. The returned token and any SAP session cookies (`SAP_SESSIONID_*`, `sap-usercontext`) are cached on the Service.
 2. **This call and every subsequent mutating call** — reuse the cache, attach the token as `X-CSRF-Token` header and the cookies as a combined `Cookie` header.
 3. **On 403 with `X-CSRF-Token: Required`** — the server-side session was recycled. Invalidate the cache, re-fetch once, retry the mutating call a single time. A 403 WITHOUT that header is a real authorization failure and surfaces to the caller unchanged — retrying wouldn't help.
 
 The request body is buffered up-front so the retry can re-read it. For bodies too large to buffer, write your own handshake on top of `CallOnPremise`.
 
-For handler tests, depend on the narrow `btp.OnPremMutator` interface (same shape as `OnPremCaller`, single method `CallOnPremiseMutating`) and substitute a one-method fake.
-The CSRF logic is the service's concern, already tested in `internal/btp/service_csrf_test.go`.
+For handler tests, depend on the narrow `btpingo.OnPremMutator` interface (same shape as `OnPremCaller`, single method `CallOnPremiseMutating`) and substitute a one-method fake.
+The CSRF logic is the service's concern, already tested in [`btpingo`'s `service_csrf_test.go`](https://github.com/hochfrequenz/btpingo/blob/v0.1.0/service_csrf_test.go).
 Handlers that mix reads and writes declare a composite interface at the usage site:
 
 ```go
 type MyClient interface {
-    btp.OnPremCaller
-    btp.OnPremMutator
+    btpingo.OnPremCaller
+    btpingo.OnPremMutator
 }
 ```
 
@@ -400,13 +396,13 @@ The whole codebase runs on Dave Cheney's [two-levels discipline](https://dave.ch
 If you're coming from Java or ABAP, the rules are probably tighter than you're used to.
 
 1. **Only two levels matter.** `INFO` is useful operational output. `DEBUG` is useful to a developer chasing a specific problem and is off by default in production. `ERROR` exists only as an output-filter knob (`LOG_LEVEL=error` for low-noise deployments), not as a level you ever _write_ to - errors are returned, not logged (see rule 2).
-2. **Errors are not a log level.** An error is a return value. Handlers return it; only the boundary that cannot return any further (the HTTP response, or `main`) logs it. `btp.AbortError` is that boundary for HTTP responses — it writes the envelope and logs the underlying Go error once, server-side, with the request ID.
+2. **Errors are not a log level.** An error is a return value. Handlers return it; only the boundary that cannot return any further (the HTTP response, or `main`) logs it. `ginpingo.AbortError` is that boundary for HTTP responses — it writes the envelope and logs the underlying Go error once, server-side, with the request ID.
 3. **`WARN` doesn't exist in this repo.** If it's serious, handle it as an error. If it isn't, log `INFO`. "Something odd happened but I'm going to continue" is where warnings accumulate that nobody ever acts on - don't write those.
 4. **One access-log line per request.** Already wired in `cmd/server/main.go`'s `requestLog`; don't add "entering handler" / "leaving handler" lines on top. If a handler needs business-event context (e.g. `invoicesync` logs `user + company_code`), emit exactly one line per business event, not per middleware stage.
 
 Enforcement: `.github/workflows/template-guards.yml` greps the tree for `.Warn(` and fails CI on any hit. A new PR that reintroduces warnings is blocked at merge; the error message points back to this section.
 
-Local debugging: set `LOG_LEVEL=debug` before running the server to see `DEBUG`-level lines (e.g. client-disconnect details from `Service.ProxyHandler`). `INFO` is the production default; `ERROR` is available for low-noise deployments.
+Local debugging: set `LOG_LEVEL=debug` before running the server to see `DEBUG`-level lines (e.g. client-disconnect details from `ginpingo.ProxyHandler`). `INFO` is the production default; `ERROR` is available for low-noise deployments.
 
 ---
 
@@ -433,7 +429,7 @@ A huma-style handler looks like this.
 type DiscoveryInput struct{}                      // GET, no input
 type DiscoveryOutput struct{ Body Response }      // huma reads `Body` for the JSON payload
 
-func Register(api huma.API, svc btp.OnPremCaller) {
+func Register(api huma.API, svc btpingo.OnPremCaller) {
     huma.Register(api, huma.Operation{
         OperationID: "adt-discovery",
         Method:      http.MethodGet,
@@ -442,7 +438,7 @@ func Register(api huma.API, svc btp.OnPremCaller) {
     }, Handler(svc))
 }
 
-func Handler(svc btp.OnPremCaller) func(context.Context, *DiscoveryInput) (*DiscoveryOutput, error) {
+func Handler(svc btpingo.OnPremCaller) func(context.Context, *DiscoveryInput) (*DiscoveryOutput, error) {
     return func(ctx context.Context, _ *DiscoveryInput) (*DiscoveryOutput, error) {
         // … call svc.CallOnPremise, parse, translate …
         return &DiscoveryOutput{Body: toResponse(svcDoc)}, nil
@@ -460,11 +456,11 @@ Both can coexist on the same router group; pick one per handler — never mix th
 | Need                                                                                                                | Pick              | Why                                                                                                                   |
 | ------------------------------------------------------------------------------------------------------------------- | ----------------- | --------------------------------------------------------------------------------------------------------------------- |
 | Read-only (GET) and you want OpenAPI 3.1 / Swagger UI coverage                                                      | **huma**          | The route auto-appears in `/openapi.json`; no manual spec wiring.                                                     |
-| Mutating (POST / PUT / DELETE / PATCH) and you need `user_name` (or any other claim) from the JWT for audit logging | **gin**           | `c.MustGet("jwtClaims")` is on the hot path; `btp.AbortError` carries the typed envelope.                             |
+| Mutating (POST / PUT / DELETE / PATCH) and you need `user_name` (or any other claim) from the JWT for audit logging | **gin**           | `c.MustGet(ginpingo.ClaimsContextKey)` is on the hot path; `ginpingo.AbortError` carries the typed envelope.          |
 | Mutating without claim access                                                                                       | **gin** (default) | Same envelope shape as the rest of the typed-error story; consistent with the two existing mutating examples.         |
 | Tied — could go either way                                                                                          | **gin**           | Matches more existing examples (2 of 3); easier for fork-authors to consistency-check against the canonical patterns. |
 
-> **Error envelope.** Huma renders errors as RFC 7807 problem-details (`{"title":"Bad Gateway","status":502,"detail":"…"}`); the gin-style handlers use `btp.ErrorEnvelope` (`{"error":{"code":"upstream_unreachable","message":"…","request_id":"…"}}`). Aware mismatch: unifying both onto `btp.ErrorEnvelope` requires overriding `huma.NewError` AND propagating `request_id` into `context.Context`, which is the same adapter as the `jwtClaims` follow-up. Until then, clients calling `/api/adt-discovery` see RFC 7807; clients calling `/api/adt-checkrun` see the typed envelope.
+> **Error envelope.** Huma renders errors as RFC 7807 problem-details (`{"title":"Bad Gateway","status":502,"detail":"…"}`); the gin-style handlers use `btpingo.ErrorEnvelope` (`{"error":{"code":"upstream_unreachable","message":"…","request_id":"…"}}`). Aware mismatch: unifying both onto `btpingo.ErrorEnvelope` requires overriding `huma.NewError` so it builds the envelope, reading the ID with `btpingo.RequestIDFromContext(ctx)`. The ID is already on `context.Context`: `ginpingo.RequestID()` puts it there. Until then, clients calling `/api/adt-discovery` see RFC 7807; clients calling `/api/adt-checkrun` see the typed envelope.
 
 ### Test your handler without touching SAP
 
@@ -472,10 +468,10 @@ Both can coexist on the same router group; pick one per handler — never mix th
 > The red-green-refactor loop that never really worked in ABAP works here because the feedback is cheap. If that sounds unfamiliar, the three tests in this sub-section are a good first encounter: copy them, break something in the handler, watch the test fail in 0.3 s, fix it, watch it pass.
 
 Integration-testing against a real on-prem SAP is a pain: transport requests, user lockouts, Short Dumps on edge cases, an ABAP stack that boots in minutes.
-The template is designed so you almost never have to. Every handler depends on the narrow `btp.OnPremCaller` interface rather than the concrete `*btp.Service`:
+The template is designed so you almost never have to. Every handler depends on the narrow `btpingo.OnPremCaller` interface rather than the concrete `*btpingo.Service`:
 
 ```go
-// internal/btp/service.go — the contract handlers should depend on:
+// btpingo's service.go — the contract handlers should depend on:
 type OnPremCaller interface {
     CallOnPremise(ctx context.Context, destName, method, pathSuffix string,
         headers http.Header, body io.Reader) (*http.Response, error)
@@ -485,7 +481,7 @@ type OnPremCaller interface {
 The concrete `Service` type satisfies it in production.
 Tests substitute a one-method fake that records the request the handler produced and returns a canned response — no XSUAA, no Destination lookup, no Cloud Connector tunnel, no ABAP.
 
-> **Library-intent surface.** The set of identifiers handlers are allowed to lean on lives at [`internal/btp/doc.go`](internal/btp/doc.go).
+> **Library-intent surface.** The set of identifiers handlers are allowed to lean on lives at [`btpingo`'s `doc.go`](https://pkg.go.dev/github.com/hochfrequenz/btpingo) (and [`ginpingo`'s](https://pkg.go.dev/github.com/hochfrequenz/btpingo/ginpingo) for the Gin adapters).
 > Anything else in the package is template-internal and may move without notice.
 > A CI gate blocks PRs that add a dependency on the concrete `Service` type from outside `cmd/server/main.go`.
 
@@ -536,7 +532,7 @@ The full test file shows three cases worth copying into your own handler tests:
 2. **Validation fails before SAP** — an invalid payload must 400 **without ever calling `CallOnPremise`** (the test asserts the fake was not invoked).
 3. **On-prem error surfaces as 502** — when the fake returns an error, the handler responds 502, not 500.
 
-If you need to exercise the three-leg token dance end-to-end (destination lookup + XSUAA client_credentials + Connectivity token + Cloud Connector proxy), the heavier `httptest.NewServer` pattern is in [`internal/btp/service_test.go`](internal/btp/service_test.go).
+If you need to exercise the three-leg token dance end-to-end (destination lookup + XSUAA client_credentials + Connectivity token + Cloud Connector proxy), the heavier `httptest.NewServer` pattern is in [`btpingo`'s `service_test.go`](https://github.com/hochfrequenz/btpingo/blob/v0.1.0/service_test.go); fakes for your own handler tests live next to each example handler in `examples/*/handler_test.go`, not in an importable `btpingo/internal/testkit` — that package is unexported by design.
 For everyday handler work the interface-plus-fake pattern above is faster and more targeted.
 
 ---
@@ -548,8 +544,8 @@ For the 80 % case you can assume each of the following without looking:
 
 | Concern                                               | Handled by                            | Assume that                                                                                  |
 | ----------------------------------------------------- | ------------------------------------- | -------------------------------------------------------------------------------------------- |
-| XSUAA `aud` / `iss` claim shapes                      | `internal/btp/auth.go`                | the caller is authenticated if your handler runs                                             |
-| The three-leg token dance (XSUAA → Dest → XSUAA → CC) | `internal/btp/service.go`             | `svc.CallOnPremise` just works; one call, full round-trip                                    |
+| XSUAA `aud` / `iss` claim shapes                      | `btpingo`'s `auth.go`                 | the caller is authenticated if your handler runs                                             |
+| The three-leg token dance (XSUAA → Dest → XSUAA → CC) | `btpingo`'s `service.go`              | `svc.CallOnPremise` just works; one call, full round-trip                                    |
 | Which headers get forwarded                           | `skipForwardedHeader` in `service.go` | hop-by-hop + `Authorization` + `Cookie` + `Host` are stripped; everything else flows through |
 | Path-traversal defence                                | `Service.CallOnPremise`               | `..` in the `path` suffix is rejected before anything leaves the process                     |
 | XSUAA token expiry mid-request                        | `tokens.go` + retry in `service.go`   | a stale connectivity token on a body-less call self-heals once without a 500                 |
@@ -560,7 +556,7 @@ If you do hit a wall, [How it works under the hood](#how-it-works-under-the-hood
 
 ### When you need to look deeper
 
-- **Your Destination uses Principal Propagation, not Basic Auth.** The approuter-forwarded user JWT is stashed in the request context under `btp.ForwardedUserTokenKey{}`; implement a `DestinationAuthenticator` that reads it and sets `SAP-Connectivity-Authentication`. See "Extension points" below.
+- **Your Destination uses Principal Propagation, not Basic Auth.** The approuter-forwarded user JWT is stashed in the request context under `btpingo.ForwardedUserTokenKey{}`; implement a `DestinationAuthenticator` that reads it and sets `SAP-Connectivity-Authentication`. See "Extension points" below.
 - **Your on-prem endpoint needs CSRF tokens for writes** (most ADT writes do). Use `svc.CallOnPremiseMutating` — it runs the `X-CSRF-Token: Fetch` → attach-token-and-cookies → retry-once-on-403 dance transparently. See [Calling SAP with a POST — the CSRF case](#calling-sap-with-a-post--the-csrf-case) below.
 - **One of the demo endpoints (`/api/adt-discovery`, `/api/adt-checkrun`) returns 502 or an unexpected 401.** See the failure-mode ladder under "Smoke tests" below.
 
@@ -734,7 +730,7 @@ Skipping this yields "redirect URI mismatch" on the first OAuth login.
 3. Security → **Users** → your user → add the new Role Collection.
 4. If you were already logged in through the approuter, log out (`/logout`) and back in so the new token carries the scope.
 
-The `/api/*` routes this MWE ships with do **not** enforce the `User` scope — the JWT middleware only validates signature, audience, and expiry, so a valid XSUAA user passes regardless of Role Collection. 5b matters the moment you add a scope-gated route (e.g. `c.MustGet("jwtClaims")` then checking `scope` contains `User`); without 5b, that route would 403 even though login succeeds.
+The `/api/*` routes this MWE ships with do **not** enforce the `User` scope — the JWT middleware validates signature, audience and the time claims (`exp`, `nbf`, `iat`) but not scopes, so a valid XSUAA user passes regardless of Role Collection. 5b matters the moment you add a scope-gated route (e.g. `c.MustGet(ginpingo.ClaimsContextKey)` then checking `scope` contains `User`); without 5b, that route would 403 even though login succeeds.
 
 </details>
 
@@ -798,7 +794,7 @@ Open in a browser — `curl` alone cannot complete the XSUAA SSO dance. Use what
 https://<approuter-host>.<domain>/api/me
 ```
 
-Expected: a JSON body with a `claims` object — your `email`, `given_name`, `family_name`, `scope`, and `xs.system.attributes.xs.rolecollections`. This exercises the approuter's XSUAA auth-code flow, the Go backend's JWKS-pinned signature verification, and the `aud` / exp / leeway checks in `internal/btp/auth.go`.
+Expected: a JSON body with a `claims` object — your `email`, `given_name`, `family_name`, `scope`, and `xs.system.attributes.xs.rolecollections`. This exercises the approuter's XSUAA auth-code flow, the Go backend's JWKS-pinned signature verification, and the `aud` / exp / leeway checks in `btpingo`'s `auth.go`.
 
 A `401 invalid token: ... invalid audience` here points at section 7 of this deployment's tracking issue — XSUAA emits `aud` in the `sb-<xsappname>!t<tenant>` (`ClientID`) form, not bare `<xsappname>`.
 
@@ -826,7 +822,7 @@ Why `/sap/bc/adt/discovery` as the probe: it's a standard ABAP Development Tools
 <summary>Failure-mode ladder — what each error code usually means, in order of "more annoying to diagnose"</summary>
 
 - `404` from the approuter: the backend isn't bound to the destination `GoBackend` that `web/xs-app.json` references, or the backend crashed. `cf logs <backend-host> --recent`.
-- `401 invalid audience` or `... invalid issuer`: section 7. The JWT middleware expects a token shape XSUAA does not emit. Fix is in `internal/btp/auth.go`.
+- `401 invalid audience` or `... invalid issuer`: section 7. The JWT middleware expects a token shape XSUAA does not emit. Fix is in `btpingo`'s `auth.go`.
 - `502` from the Go backend: the destination lookup succeeded but the on-premise call failed. Most common causes: the destination's virtual host is not exposed by the Cloud Connector, or the Cloud Connector is red.
 - `403` with an SAP-branded body: the destination's stored user authenticated successfully but does not have authorization for the path you chose. Switch the path, not the destination.
 
@@ -887,7 +883,7 @@ go test ./... -covermode=count -coverprofile=coverage.out
 
 CI enforces 90% line coverage (`.github/workflows/coverage.yml`).
 
-If you need to exercise Gin handlers against real (stub) BTP services locally, set the env explicitly — the required shape matches `internal/btp/env.go` struct tags.
+If you need to exercise Gin handlers against real (stub) BTP services locally, set the env explicitly — the required shape matches `btpingo`'s `env.go` struct tags.
 
 <details>
 <summary>VCAP env stub — expand to copy</summary>
@@ -914,7 +910,7 @@ No more "fix one field, redeploy, find the next missing field."
 
 ## Extension points
 
-The primary extension surface is `btp.DestinationAuthenticator`:
+The primary extension surface is `btpingo.DestinationAuthenticator`:
 
 ```go
 type DestinationAuthenticator interface {
@@ -926,7 +922,7 @@ type DestinationAuthenticator interface {
 Register more at startup without touching the call site:
 
 ```go
-svc, _ := btp.NewService(env)
+svc, _ := btpingo.NewService(env)
 svc.Authenticators().Register(myAuth0Authenticator{})
 svc.Authenticators().Register(myOAuth2ClientCredsAuthenticator{})
 ```
@@ -934,7 +930,7 @@ svc.Authenticators().Register(myOAuth2ClientCredsAuthenticator{})
 Shipped out of the box: `AuthNone` and `AuthBasic`, plus a rejecting fallback so unknown auth types fail loudly rather than travelling unauthenticated.
 The authenticator registry is where Auth0/SSO/`OAuth2ClientCredentials`/`PrincipalPropagation` plug in.
 
-For Principal Propagation specifically: the approuter-forwarded user JWT is stashed in the request context under `btp.ForwardedUserTokenKey{}` — a PP authenticator reads it from there and sets `SAP-Connectivity-Authentication`.
+For Principal Propagation specifically: the approuter-forwarded user JWT is stashed in the request context under `btpingo.ForwardedUserTokenKey{}` — a PP authenticator reads it from there and sets `SAP-Connectivity-Authentication`.
 
 ### Timeouts — three layers, two of them ours
 
@@ -950,11 +946,11 @@ Three different timeouts gate it; two are set by this template, the third is dep
 | `WriteTimeout`      | 900 s   | Bounds _total_ handler runtime — `WriteTimeout` starts at header-read, not at first write, and covers the CSRF handshake + main on-prem call + response write as one budget. Deliberately 5 min larger than `DefaultOnPremiseTimeout` so the on-prem layer reliably fires first on slow SAP. |
 | `IdleTimeout`       | 120 s   | Keep-alive sockets parked indefinitely.                                                                                                                                                                                                                                                      |
 
-**On-prem HTTP client (`btp.DefaultOnPremiseTimeout`):**
+**On-prem HTTP client (`btpingo.DefaultOnPremiseTimeout`):**
 
-| Setting                   | Default | Why                                                                                                                                                                                                                                                                              |
-| ------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `DefaultOnPremiseTimeout` | 600 s   | Per-call timeout on `*btp.Service`'s on-prem `*http.Client`. ADT-through-CC calls regularly take minutes; observed worst case ~5 minutes. 10 minutes is the per-call ceiling. Override per-instance with `btp.WithOnPremiseTimeout(...)` when the fork's SAP is reliably faster. |
+| Setting                   | Default | Why                                                                                                                                                                                                                                                                                      |
+| ------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DefaultOnPremiseTimeout` | 600 s   | Per-call timeout on `*btpingo.Service`'s on-prem `*http.Client`. ADT-through-CC calls regularly take minutes; observed worst case ~5 minutes. 10 minutes is the per-call ceiling. Override per-instance with `btpingo.WithOnPremiseTimeout(...)` when the fork's SAP is reliably faster. |
 
 The two values are intentionally **asymmetric**: `WriteTimeout` (one budget for the whole handler) sits 5 min above `DefaultOnPremiseTimeout` (one budget per on-prem call).
 On a CSRF mutating route — `HEAD/GET` for the token, then `POST` — each leg gets its own 10-min on-prem budget; the 15-min `WriteTimeout` covers both legs plus response write without racing the on-prem timeout.
@@ -963,7 +959,7 @@ Result: a hung SAP always surfaces as a clean `upstream_unreachable` envelope fr
 **CF Gorouter (deployment-managed):** The CF route layer has its own per-request timeout (typically ~900 s, varies by foundation/landscape).
 It bounds _both_ of the above — the 900 s `WriteTimeout` is intentionally aligned with that ceiling. If a fork legitimately needs longer than the route allows, raising the values here is moot — the platform owner has to extend the route timeout.
 
-If a single handler legitimately needs longer than 900 s — large-file streaming, long-poll, exceptionally slow batch — override per-request with `http.NewResponseController(w).SetWriteDeadline(...)` (server side) **and** wrap the on-prem client (or pass a different `WithOnPremiseTimeout` to a dedicated `*btp.Service` instance for that route). Loosening the global defaults re-opens the slow-client surface for every other route.
+If a single handler legitimately needs longer than 900 s — large-file streaming, long-poll, exceptionally slow batch — override per-request with `http.NewResponseController(w).SetWriteDeadline(...)` (server side) **and** wrap the on-prem client (or pass a different `WithOnPremiseTimeout` to a dedicated `*btpingo.Service` instance for that route). Loosening the global defaults re-opens the slow-client surface for every other route.
 
 ## How it works under the hood
 
