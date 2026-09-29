@@ -1,5 +1,7 @@
 # Design: demo-route mounting safety (#125)
 
+> **Superseded detail:** the shipped `buildRouter` takes the auth middleware as a `gin.HandlerFunc` (`main` passes `ginpingo.JWT(validator)` since the switch to btpingo, #130), not a `routeGuard` interface; the fork-chores `rg` pattern is anchored to non-comment lines (`^\s*(adtdiscovery|adtcheckrun)\.Register\(`). The rest of this document is the original design record.
+
 Issue: [#125 — Demo routes are mounted by default](https://github.com/Hochfrequenz/go-sap-btp-cf-template/issues/125)
 
 ## Problem
