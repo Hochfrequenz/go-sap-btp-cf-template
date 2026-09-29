@@ -13,7 +13,8 @@ import (
 	"github.com/corbym/gocrest/then"
 	"github.com/gin-gonic/gin"
 
-	"github.com/hochfrequenz/go-sap-btp-cf-template/internal/btp"
+	"github.com/hochfrequenz/btpingo"
+	"github.com/hochfrequenz/btpingo/ginpingo"
 )
 
 // Test_logLevelFromEnv_MapsKnownAndUnknown pins the LOG_LEVEL contract
@@ -45,13 +46,13 @@ func Test_logLevelFromEnv_MapsKnownAndUnknown(t *testing.T) {
 }
 
 // Test_recoverPanic_EmitsTypedEnvelope pins the recovery contract: a
-// panicking handler must produce a JSON btp.ErrorEnvelope with code
+// panicking handler must produce a JSON btpingo.ErrorEnvelope with code
 // = "internal", not Gin's plain-text "Internal Server Error". A future
 // refactor that reverts to gin.Recovery() trips this test.
 func Test_recoverPanic_EmitsTypedEnvelope(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.Use(recoverPanic(), btp.RequestID())
+	r.Use(recoverPanic(), ginpingo.RequestID())
 	r.GET("/boom", func(_ *gin.Context) {
 		panic("kaboom")
 	})
@@ -64,9 +65,9 @@ func Test_recoverPanic_EmitsTypedEnvelope(t *testing.T) {
 	then.AssertThat(t, w.Header().Get("Content-Type"),
 		is.EqualTo("application/json; charset=utf-8"))
 
-	var env btp.ErrorEnvelope
+	var env btpingo.ErrorEnvelope
 	then.AssertThat(t, json.Unmarshal(w.Body.Bytes(), &env), is.Nil())
-	then.AssertThat(t, env.Error.Code, is.EqualTo(btp.CodeInternal))
+	then.AssertThat(t, env.Error.Code, is.EqualTo(btpingo.CodeInternal))
 	then.AssertThat(t, env.Error.Message, is.EqualTo("internal error"))
 	// Crucially: the panic value must NOT leak to the client. "kaboom"
 	// belongs in the operator-side log line via AbortError, not in the
@@ -89,7 +90,7 @@ func Test_recoverPanic_EmitsTypedEnvelope(t *testing.T) {
 func Test_recoverPanic_PreservesClientSuppliedRequestID(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.Use(recoverPanic(), btp.RequestID())
+	r.Use(recoverPanic(), ginpingo.RequestID())
 	r.GET("/boom", func(_ *gin.Context) {
 		panic("kaboom")
 	})
@@ -99,7 +100,7 @@ func Test_recoverPanic_PreservesClientSuppliedRequestID(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	var env btp.ErrorEnvelope
+	var env btpingo.ErrorEnvelope
 	then.AssertThat(t, json.Unmarshal(w.Body.Bytes(), &env), is.Nil())
 	then.AssertThat(t, env.Error.RequestID, is.EqualTo("rid-from-approuter"))
 }
@@ -118,7 +119,7 @@ func Test_requestLog_OmitsQueryStringAndClaims(t *testing.T) {
 
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.Use(btp.RequestID(), requestLog(logger))
+	r.Use(ginpingo.RequestID(), requestLog(logger))
 	// Pretend an authenticator upstream has dropped claims in the
 	// context — the generic access log must not read or emit them.
 	r.Use(func(c *gin.Context) {

@@ -12,7 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// fakeRouteCaller is a one-method fake satisfying btp.OnPremCaller, in the
+// fakeRouteCaller is a one-method fake satisfying btpingo.OnPremCaller, in the
 // shape of examples/adtdiscovery/handler_test.go's fakeCaller. The
 // route-table test never invokes it; buildRouter just needs a value.
 type fakeRouteCaller struct{}
@@ -22,7 +22,7 @@ func (fakeRouteCaller) CallOnPremise(_ context.Context, _, _, _ string,
 	return nil, nil
 }
 
-// fakeRouteMutator is a one-method fake satisfying btp.OnPremMutator, in the
+// fakeRouteMutator is a one-method fake satisfying btpingo.OnPremMutator, in the
 // shape of examples/adtcheckrun/handler_test.go's fakeMutator. Unused at
 // call time; buildRouter just needs a value.
 type fakeRouteMutator struct{}

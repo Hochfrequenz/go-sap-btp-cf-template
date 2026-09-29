@@ -15,18 +15,20 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 
+	"github.com/hochfrequenz/btpingo"
+	"github.com/hochfrequenz/btpingo/ginpingo"
+
 	"github.com/hochfrequenz/go-sap-btp-cf-template/examples/adtcheckrun"
-	"github.com/hochfrequenz/go-sap-btp-cf-template/internal/btp"
 )
 
 // fakeMutator is the canonical handler-test double for CSRF-flavoured
-// endpoints: a one-method fake satisfying btp.OnPremMutator. It
+// endpoints: a one-method fake satisfying btpingo.OnPremMutator. It
 // records the arguments the handler passed (so the test can assert
 // request shape) and returns a canned response (so the test can
 // assert response translation).
 //
 // It does NOT model the CSRF handshake — that's the Service's
-// concern, fully tested in internal/btp/service_csrf_test.go. The
+// concern, fully tested in btpingo's service_csrf_test.go. The
 // handler only needs to prove it calls the mutator with the right
 // shape; a fake that pretends the handshake already happened is the
 // simplest thing that works.
@@ -55,7 +57,7 @@ func (f *fakeMutator) CallOnPremiseMutating(_ context.Context, dest, method, pat
 
 func stubJWTClaims(claims jwt.MapClaims) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		c.Set("jwtClaims", claims)
+		c.Set(ginpingo.ClaimsContextKey, claims)
 		c.Next()
 	}
 }
@@ -210,9 +212,9 @@ func Test_Handler_RejectsNonADTObjectURI(t *testing.T) {
 	r.ServeHTTP(w, req)
 
 	then.AssertThat(t, w.Code, is.EqualTo(http.StatusBadRequest))
-	var env btp.ErrorEnvelope
+	var env btpingo.ErrorEnvelope
 	then.AssertThat(t, json.Unmarshal(w.Body.Bytes(), &env), is.Nil())
-	then.AssertThat(t, env.Error.Code, is.EqualTo(btp.CodeInvalidRequest))
+	then.AssertThat(t, env.Error.Code, is.EqualTo(btpingo.CodeInvalidRequest))
 	then.AssertThat(t, fake.gotDest, is.EqualTo(""))
 }
 
@@ -226,9 +228,9 @@ func Test_Handler_SurfacesUpstreamErrorAs502(t *testing.T) {
 	r.ServeHTTP(w, req)
 
 	then.AssertThat(t, w.Code, is.EqualTo(http.StatusBadGateway))
-	var env btp.ErrorEnvelope
+	var env btpingo.ErrorEnvelope
 	then.AssertThat(t, json.Unmarshal(w.Body.Bytes(), &env), is.Nil())
-	then.AssertThat(t, env.Error.Code, is.EqualTo(btp.CodeUpstreamUnreachable))
+	then.AssertThat(t, env.Error.Code, is.EqualTo(btpingo.CodeUpstreamUnreachable))
 	then.AssertThat(t,
 		strings.Contains(w.Body.String(), "on-prem system unreachable"), is.False())
 }
@@ -253,9 +255,9 @@ func Test_Handler_SurfacesBadSAPResponseAs502(t *testing.T) {
 	r.ServeHTTP(w, req)
 
 	then.AssertThat(t, w.Code, is.EqualTo(http.StatusBadGateway))
-	var env btp.ErrorEnvelope
+	var env btpingo.ErrorEnvelope
 	then.AssertThat(t, json.Unmarshal(w.Body.Bytes(), &env), is.Nil())
-	then.AssertThat(t, env.Error.Code, is.EqualTo(btp.CodeUpstreamUnreachable))
+	then.AssertThat(t, env.Error.Code, is.EqualTo(btpingo.CodeUpstreamUnreachable))
 }
 
 func Test_Handler_SurfacesNon2xxAs502(t *testing.T) {
@@ -274,9 +276,9 @@ func Test_Handler_SurfacesNon2xxAs502(t *testing.T) {
 	r.ServeHTTP(w, req)
 
 	then.AssertThat(t, w.Code, is.EqualTo(http.StatusBadGateway))
-	var env btp.ErrorEnvelope
+	var env btpingo.ErrorEnvelope
 	then.AssertThat(t, json.Unmarshal(w.Body.Bytes(), &env), is.Nil())
-	then.AssertThat(t, env.Error.Code, is.EqualTo(btp.CodeUpstreamUnreachable))
+	then.AssertThat(t, env.Error.Code, is.EqualTo(btpingo.CodeUpstreamUnreachable))
 	// SAP HTTP status surfaces in the detail — the diagnosability
 	// fix from issue #68 motivated by PR #67's 400-from-SAP debug pain.
 	then.AssertThat(t, env.Error.Message, is.EqualTo("on-premise system returned HTTP 500"))
@@ -304,9 +306,9 @@ func Test_Handler_SurfacesBodyReadErrorAs502(t *testing.T) {
 	r.ServeHTTP(w, req)
 
 	then.AssertThat(t, w.Code, is.EqualTo(http.StatusBadGateway))
-	var env btp.ErrorEnvelope
+	var env btpingo.ErrorEnvelope
 	then.AssertThat(t, json.Unmarshal(w.Body.Bytes(), &env), is.Nil())
-	then.AssertThat(t, env.Error.Code, is.EqualTo(btp.CodeUpstreamUnreachable))
+	then.AssertThat(t, env.Error.Code, is.EqualTo(btpingo.CodeUpstreamUnreachable))
 }
 
 // Test_Register_AttachesPOSTRoute proves Register wires the route

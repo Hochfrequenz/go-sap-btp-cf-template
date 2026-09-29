@@ -16,8 +16,9 @@ import (
 	"github.com/danielgtaylor/huma/v2/adapters/humagin"
 	"github.com/gin-gonic/gin"
 
+	"github.com/hochfrequenz/btpingo"
+
 	"github.com/hochfrequenz/go-sap-btp-cf-template/examples/adtdiscovery"
-	"github.com/hochfrequenz/go-sap-btp-cf-template/internal/btp"
 )
 
 // fakeCaller mirrors the OnPremCaller pattern used elsewhere in
@@ -135,9 +136,9 @@ func Test_Handler_CallsCorrectSAPPath(t *testing.T) {
 // Test_Handler_SurfacesUpstreamErrorAs502 pins the upstream-failure
 // path. huma renders errors as the RFC 7807 problem-details model
 // (Title, Status, Detail) — different shape from the gin-style
-// btp.ErrorEnvelope used elsewhere in the template. The status is
+// btpingo.ErrorEnvelope used elsewhere in the template. The status is
 // what callers switch on; the detail carries the user-safe message
-// classified by btp.ClassifyOnPremError.
+// classified by btpingo.ClassifyOnPremError.
 func Test_Handler_SurfacesUpstreamErrorAs502(t *testing.T) {
 	fake := &fakeCaller{err: errors.New("on-prem system unreachable")}
 	r := newRouter(fake)
@@ -160,10 +161,10 @@ func Test_Handler_SurfacesUpstreamErrorAs502(t *testing.T) {
 
 // Test_Handler_ClassifiesDestinationNotFoundAs502 pins that the
 // classifier's destination-not-found branch reaches the wire — proves
-// the handler delegates to btp.ClassifyOnPremError rather than emitting
+// the handler delegates to btpingo.ClassifyOnPremError rather than emitting
 // a single constant detail for every error.
 func Test_Handler_ClassifiesDestinationNotFoundAs502(t *testing.T) {
-	fake := &fakeCaller{err: btp.ErrDestinationNotFound}
+	fake := &fakeCaller{err: btpingo.ErrDestinationNotFound}
 	r := newRouter(fake)
 
 	req := httptest.NewRequest(http.MethodGet, "/adt-discovery", nil)
