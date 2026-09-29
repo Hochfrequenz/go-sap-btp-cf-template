@@ -99,11 +99,21 @@ Do: before activating, running tests you will report, or measuring anything, run
 Cause: abaplint parses; with this config it neither executes nor type-checks. Defects that reached SAP through a clean abaplint run include a 34-character method name, a `'…'` literal where a `string` table row needed backticks, and a missing `RAISING` clause.
 Do: treat a lint run as a lint run. A test has run only when it has run on a real system. Report counts and the system, for example "35/35 green on the ECC system".
 
+**A headless ABAP Unit / syntax-check run in CI is not evidence a test passes on a SAP system.**
+Cause: a non-SAP headless ABAP runtime running in CI can execute ABAP Unit and a real syntax check, which is a stronger signal than abaplint's parse-only pass above — but it is still not the target system: no SAP_BASIS release under test, no kernel patch level, no add-ons. A gap between that runtime and a real system shows up as a run that is red in CI and green on SAP, or the other way round.
+Do: pin the runtime's version so a result is reproducible, treat it as report-only and never a merge gate, and read a red result there as more likely a gap in the runtime than in your code. It is not evidence that a test passes on a SAP system — only a run on one is.
+
 ### Syntax floor and compile traps
 
 **A name longer than 30 characters is a hard compile error.** abaplint has no dedicated rule for this. The `forbidden_identifier` regex in the [`abaplint.json`](#abaplintjson) below closes the gap. Test method names are the usual offenders.
 
 **Trailing blanks disappear from a `string`.** A `'…'` literal is type `c`, and converting `c` to `string` drops trailing blanks. Use backtick literals (`` `trailing space ` ``) wherever the value is a `string`, in `VALUE #( )` table rows in particular.
+
+**`condense( )` eats more than trailing blanks.** It removes leading blanks too, and collapses every inner run of blanks down to one. Caller-supplied text can legitimately carry leading or repeated blanks, and `condense( )` throws those away with no warning. Never reach for it to trim caller data; strip only what you mean to strip.
+
+**Offset access on an empty string dumps.** `lv(1)` (or any other offset/length access) on an empty `lv` raises `cx_sy_range_out_of_bounds`. It is catchable, but easy to trigger by surprise on caller-supplied text that turned out empty. Check `strlen( lv )` before the access.
+
+**A negative number renders with the sign on the wrong side.** Converting a negative number into a character field the plain way puts the sign on the right (`5-`), not the left. The [JSON writer](#json-writer-sxml)'s `write_number` already covers this: a string template (`|{ iv_value }|`) gives `-5`, a plain assignment gives `5-`. Use a string template wherever you render a number as text.
 
 **A malformed request body answers 500 instead of 400.** Every `CX_SXML_*` exception is a `CX_DYNAMIC_CHECK`, so it needs no `RAISING` clause and escapes silently to the handler's `CATCH cx_root`. That branch blames your code for the caller's bytes. At the parser boundary, catch the superclass `cx_sxml_error` (not `cx_sxml_parse_error` alone) and re-raise as your own 400 code with `io_previous`. A truncated body such as `{"table":` was once observed raising something outside the `CX_SXML_*` hierarchy on SAP_BASIS 750. A recursive-descent parser that calls the reader in many places therefore catches `cx_root`, at the cost of a real parser bug also presenting as 400, with the cause kept in `previous`.
 
@@ -118,6 +128,14 @@ Do: treat a lint run as a lint run. A test has run only when it has run on a rea
 **A defect in ABAP shows up in Go as "upstream unreachable".**
 Cause: an uncaught exception short-dumps the work process, and ICF answers with an HTML error page. Go finds no `code` in HTML and reports the Cloud Connector path as broken.
 Do: catch `cx_root` at the handler boundary and answer 500 `{"code":"internal_error"}` (see the [handler skeleton](#handler-skeleton)). Go then sees a code and knows the two halves are talking. A caught exception leaves no ST22 entry, so record what you need (code, detail, `previous->get_text( )`) yourself. Only uncatchable errors still dump and still answer HTML: `TIME_OUT`, memory exhaustion (`TSV_TNEW_PAGE_ALLOC_FAILED`), a failed `ASSERT`, or an unhandled classic function-module exception. Large `SELECT`s are where the first two bite.
+
+**A deeply nested request body takes down the work process instead of failing with 400.**
+Cause: ABAP has no catchable stack overflow. A recursive parser that descends once per nesting level of a caller-supplied structure — nested JSON, a tree of filter conditions — runs out of stack on a deeply nested enough body and takes the work process down with a short dump: a 500 for a request body, which Go and anything watching the system reads as a fault rather than a bad request. A limit on the parsed result's node count or size does not help here: by the time that check runs, the tree is already built and the recursion has already happened.
+Do: give the parser an explicit maximum nesting depth and check it **before** each recursive call, not on the result afterwards. Add a node-count limit alongside it for breadth; a depth limit alone does not bound a wide-but-shallow body.
+
+**A conversion exit takes down the work process instead of raising an exception.**
+Cause: `CONVERSION_EXIT_ALPHA_INPUT` (and similar exits) writes into the caller's output field, and an over-long input value makes it raise a non-catchable kernel runtime error, not a `CX_` class. A length guard placed after the call never runs — the kernel aborts first.
+Do: validate the input's length **before** calling the conversion exit, not after.
 
 ### Optional add-ons
 
@@ -375,6 +393,30 @@ CLASS ltcl_json IMPLEMENTATION.
   ENDMETHOD.
 
 ENDCLASS.
+```
+
+### Reading JSON with sXML
+
+`cl_sxml_string_reader` pull-parses the same vocabulary the writer above emits, and it has two traps of its own.
+
+**A typed element reads back as `'name'` for every member, whatever its real JSON type.**
+Cause: the element name **is** the JSON type (`str`, `num`, `object`, …), exactly as on the writing side, but `next_attribute( )` overwrites the reader's `->name` with the attribute's own name. Reading `->name` after looping the element's attributes instead of before it returns the string `'name'` for every typed element — it type-checks and is wrong everywhere.
+Do: read `io_reader->name` immediately after `co_nt_element_open`, before looping `next_attribute( )`.
+
+**A long string value comes back truncated, with no error.**
+Cause: the kernel is free to hand one scalar's text over in several `co_nt_value` nodes — escapes and long strings are the usual reasons. Assigning the value on each node keeps only the last chunk: a silently truncated value that matches different rows instead of failing.
+Do: accumulate with `&&`, never assign:
+
+```abap
+DO.
+  " ... read one node into lv_node_type / lv_value ...
+  CASE lv_node_type.
+    WHEN if_sxml_node=>co_nt_value.
+      rv_value = rv_value && lv_value.
+    WHEN if_sxml_node=>co_nt_element_close OR if_sxml_node=>co_nt_final.
+      RETURN.
+  ENDCASE.
+ENDDO.
 ```
 
 ### Handler skeleton
