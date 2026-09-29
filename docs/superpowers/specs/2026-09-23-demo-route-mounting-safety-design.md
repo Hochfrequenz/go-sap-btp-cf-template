@@ -65,7 +65,7 @@ matches an explicit allow-list. Any route not on the list fails the build.
 Two design points from the issue shape this test directly:
 
 1. **Walk the real route table**, not the OpenAPI document. `POST
-   /api/adt-checkrun` is a gin route and appears in no OpenAPI document —
+/api/adt-checkrun` is a gin route and appears in no OpenAPI document —
    an OpenAPI-only assertion would be blind to it.
 2. **Cover the root router**, not just `/api`. A demo mounted on the root
    router sits outside the JWT middleware entirely — the worse case. Root
@@ -150,9 +150,9 @@ routes", not "the concrete JWKS-fetching type".
 
 One row added to the "manual fork chores" table at `README.md:112`:
 
-| Item | Where | How to find | Why not rewritten |
-| --- | --- | --- | --- |
-| Demo routes | `cmd/server/main.go` | `rg 'adtdiscovery\.Register|adtcheckrun\.Register' cmd/server/main.go` | The two demo `Register` calls go live once `examples.destination_name` points at your destination; remove them if you don't want the routes. |
+| Item        | Where                | How to find                 | Why not rewritten                          |
+| ----------- | -------------------- | --------------------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| Demo routes | `cmd/server/main.go` | `rg 'adtdiscovery\.Register | adtcheckrun\.Register' cmd/server/main.go` | The two demo `Register` calls go live once `examples.destination_name` points at your destination; remove them if you don't want the routes. |
 
 The pattern is `rg 'adtdiscovery\.Register|adtcheckrun\.Register'` (most
 precise; matches both lines 257-258, where `adtdiscovery.Register` takes
@@ -185,11 +185,11 @@ the spec's bit-rot claim does not hold.
 
 ## Files touched
 
-| File | Change |
-| --- | --- |
-| `cmd/server/main.go` | `buildRouter` signature: `*btp.JWTValidator` → unexported `routeGuard` interface. |
-| `cmd/server/router_test.go` | New. Route-table allow-list test. |
-| `README.md` | One signpost row in the manual-chores table. |
+| File                                    | Change                                                                                                              |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `cmd/server/main.go`                    | `buildRouter` signature: `*btp.JWTValidator` → unexported `routeGuard` interface.                                   |
+| `cmd/server/router_test.go`             | New. Route-table allow-list test.                                                                                   |
+| `README.md`                             | One signpost row in the manual-chores table.                                                                        |
 | `.github/workflows/template-guards.yml` | Append `Demo routes\|rg --quiet '...'` to the `PATTERNS` heredoc (lines 262-265) so the new row is bit-rot-checked. |
 
 ## Verification

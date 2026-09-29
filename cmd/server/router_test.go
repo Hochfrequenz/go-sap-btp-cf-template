@@ -12,16 +12,6 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// fakeGuard satisfies the unexported routeGuard interface for tests.
-// Its middleware is a pass-through — the route-table test never sends a
-// request through it; it only needs a value that lets buildRouter
-// type-check, without the live JWKS fetch NewJWTValidator performs.
-type fakeGuard struct{}
-
-func (fakeGuard) Middleware() gin.HandlerFunc {
-	return func(c *gin.Context) { c.Next() }
-}
-
 // fakeRouteCaller is a one-method fake satisfying btp.OnPremCaller, in the
 // shape of examples/adtdiscovery/handler_test.go's fakeCaller. The
 // route-table test never invokes it; buildRouter just needs a value.
@@ -54,7 +44,7 @@ func (fakeRouteMutator) CallOnPremiseMutating(_ context.Context, _, _, _ string,
 // the surprise #125 is about.
 func Test_RouterAllowList(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
-	r := buildRouter(fakeGuard{}, fakeRouteCaller{}, fakeRouteMutator{}, logger)
+	r := buildRouter(func(c *gin.Context) { c.Next() }, fakeRouteCaller{}, fakeRouteMutator{}, logger)
 
 	got := make(map[string]bool) // "METHOD /path" -> true
 	for _, ri := range r.Routes() {
@@ -72,7 +62,7 @@ func Test_RouterAllowList(t *testing.T) {
 		"GET /api/me":            true,
 		"GET /api/adt-discovery": true,
 		"POST /api/adt-checkrun": true,
-		// --- huma-generated block: replace with first-run output ---
+		// huma-generated (spec variants incl. 3.0 downgrades, docs UI, schemas)
 		"GET /api/openapi.json":     true,
 		"GET /api/openapi-3.0.json": true,
 		"GET /api/openapi.yaml":     true,

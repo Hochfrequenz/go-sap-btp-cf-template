@@ -52,7 +52,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	r := buildRouter(validator, svc, svc, logger)
+	r := buildRouter(validator.Middleware(), svc, svc, logger)
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -169,15 +169,6 @@ func logLevelFromEnv() slog.Level {
 	}
 }
 
-// routeGuard is the wiring-level dependency buildRouter needs: something
-// that supplies a gin middleware enforcing a valid JWT. *btp.JWTValidator
-// satisfies it. Decoupling buildRouter from the concrete type lets the
-// route-table test pass a no-op fake (see router_test.go) instead of a
-// real validator, whose constructor does a live JWKS fetch.
-type routeGuard interface {
-	Middleware() gin.HandlerFunc
-}
-
 // buildRouter wires the Gin router from its abstract dependencies —
 // NOT from *btp.Service directly. Handlers added here are testable
 // with a one-method fake (see examples/*_test.go) and decoupled from
@@ -193,7 +184,7 @@ type routeGuard interface {
 // authority to any authenticated BTP caller. The template ships
 // without such a route; forks that genuinely need one should wire
 // `svc.ProxyHandler` themselves, gated behind `btp.RequireScope`.
-func buildRouter(validator routeGuard, caller btp.OnPremCaller, mutator btp.OnPremMutator, logger *slog.Logger) *gin.Engine {
+func buildRouter(authMW gin.HandlerFunc, caller btp.OnPremCaller, mutator btp.OnPremMutator, logger *slog.Logger) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
 	// The backend app is directly reachable on its .cfapps.* route, not
@@ -225,7 +216,7 @@ func buildRouter(validator routeGuard, caller btp.OnPremCaller, mutator btp.OnPr
 	r.GET("/version", versionHandler())
 
 	api := r.Group("/api")
-	api.Use(validator.Middleware())
+	api.Use(authMW)
 	api.GET("/me", func(c *gin.Context) {
 		claims, _ := c.Get("jwtClaims")
 		c.JSON(http.StatusOK, gin.H{"claims": claims})

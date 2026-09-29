@@ -14,18 +14,19 @@
 
 ## File Structure
 
-| File | Responsibility | Change |
-| --- | --- | --- |
-| `cmd/server/main.go` | Wiring + `buildRouter`. | Add `routeGuard` interface; change `buildRouter` validator param type. |
-| `cmd/server/router_test.go` | New. Route-table allow-list test. | Create. |
-| `README.md` | Manual-fork-chores table. | One signpost row. |
-| `.github/workflows/template-guards.yml` | Bit-rot gate for the chores table. | One `PATTERNS` heredoc entry. |
+| File                                    | Responsibility                     | Change                                                                 |
+| --------------------------------------- | ---------------------------------- | ---------------------------------------------------------------------- |
+| `cmd/server/main.go`                    | Wiring + `buildRouter`.            | Add `routeGuard` interface; change `buildRouter` validator param type. |
+| `cmd/server/router_test.go`             | New. Route-table allow-list test.  | Create.                                                                |
+| `README.md`                             | Manual-fork-chores table.          | One signpost row.                                                      |
+| `.github/workflows/template-guards.yml` | Bit-rot gate for the chores table. | One `PATTERNS` heredoc entry.                                          |
 
 ---
 
 ### Task 1: Introduce the `routeGuard` interface and retype `buildRouter`
 
 **Files:**
+
 - Modify: `cmd/server/main.go:187`
 
 The interface is unexported, `cmd/server`-local. `*btp.JWTValidator` already satisfies it (`internal/btp/auth.go:78` defines `func (v *JWTValidator) Middleware() gin.HandlerFunc`), so `main()` at `main.go:55` keeps passing its real validator unchanged.
@@ -91,6 +92,7 @@ Part of #125."
 ### Task 2: Write the route-table allow-list test (failing first)
 
 **Files:**
+
 - Create: `cmd/server/router_test.go`
 
 The test is in package `main` (same package as `buildRouter`) so it can reference the unexported `routeGuard`. It reuses the one-method fake shape from `examples/adtdiscovery/handler_test.go` (`fakeCaller`) and `examples/adtcheckrun/handler_test.go` (`fakeMutator`) — do not invent a new fake vocabulary.
@@ -272,6 +274,7 @@ Part of #125."
 ### Task 3: Add the README signpost row
 
 **Files:**
+
 - Modify: `README.md` (the "Not rewritten — manual fork chores" table, around line 112)
 
 The table has four columns: `Item | Where | How to find | Why not rewritten`. The new row's `How to find` cell contains a runnable `rg` command. ripgrep uses Rust regex — alternation is an unescaped `|`, NOT `\|` (which matches a literal pipe character and would match nothing here).
@@ -296,6 +299,7 @@ So the row to commit is:
 
 Run: `rg 'adtdiscovery\.Register|adtcheckrun\.Register' cmd/server/main.go`
 Expected: two lines of output:
+
 ```
 	adtdiscovery.Register(hapi, caller)
 	adtcheckrun.Register(api, mutator)
@@ -321,11 +325,13 @@ Part of #125."
 ### Task 4: Wire the bit-rot gate entry in template-guards.yml
 
 **Files:**
+
 - Modify: `.github/workflows/template-guards.yml:262-265` (the `PATTERNS` heredoc)
 
 The manual-chores gate (`.github/workflows/template-guards.yml:244-268`) does NOT parse README rows. It reads `label|cmd` entries from a hardcoded bash heredoc (`<<'PATTERNS' ... PATTERNS`, lines 262-265) and runs each `cmd`; a command that returns non-zero (0 hits) sets `fail=1`. Adding the README row alone does nothing — the pattern must also be appended here, or the spec's bit-rot claim does not hold.
 
 Existing entries (lines 263-264):
+
 ```
           LICENSE Hochfrequenz copyright|rg --quiet Hochfrequenz LICENSE
           CODEOWNERS Hochfrequenz team|rg --quiet Hochfrequenz .github/CODEOWNERS
@@ -344,10 +350,12 @@ The `label|cmd` shape matches the existing rows. The `IFS='|' read -r label cmd`
 - [ ] **Step 2: Verify the gate command passes locally**
 
 Run the exact command the gate will run:
+
 ```bash
 rg --quiet 'adtdiscovery\.Register|adtcheckrun\.Register' cmd/server/main.go
 echo "exit=$?"
 ```
+
 Expected: `exit=0` (both lines match → `--quiet` exits 0 → gate passes on a healthy tree).
 
 Then verify the failure mode: temporarily comment out both `Register` calls in `cmd/server/main.go:257-258`, re-run the command, confirm `exit=1`. Restore the calls afterward. (Building will fail with the calls commented — that's fine, you're only testing the `rg` exit code; comment them, run `rg`, then restore before committing.)
@@ -355,6 +363,7 @@ Then verify the failure mode: temporarily comment out both `Register` calls in `
 - [ ] **Step 3: Verify the gate's heredoc still parses**
 
 Run a local simulation of the gate loop:
+
 ```bash
 while IFS='|' read -r label cmd; do
   [ -z "$label" ] && continue
@@ -369,6 +378,7 @@ CODEOWNERS Hochfrequenz team|rg --quiet Hochfrequenz .github/CODEOWNERS
 Demo routes|rg --quiet 'adtdiscovery\.Register|adtcheckrun\.Register' cmd/server/main.go
 PATTERNS
 ```
+
 Expected: three `OK:` lines (the two existing + `Demo routes`). No `FAIL:` lines.
 
 - [ ] **Step 4: Run the full test suite + vet**
@@ -411,9 +421,11 @@ Expected: all PASS.
 - [ ] **Step 3: Confirm the README pattern and gate pattern are identical**
 
 Run:
+
 ```bash
 grep -n "adtdiscovery" README.md .github/workflows/template-guards.yml
 ```
+
 Confirm both files use `adtdiscovery\.Register|adtcheckrun\.Register` (unescaped `|`), not `\|`.
 
 - [ ] **Step 4: Final commit if any cleanup remains, else done**
