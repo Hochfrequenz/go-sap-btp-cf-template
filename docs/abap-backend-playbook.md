@@ -109,7 +109,7 @@ Do: pin the runtime's version so a result is reproducible, and let individual re
 
 **Trailing blanks disappear from a `string`.** A `'…'` literal is type `c`, and converting `c` to `string` drops trailing blanks. Use backtick literals (`` `trailing space ` ``) wherever the value is a `string`, in `VALUE #( )` table rows in particular.
 
-**Leading and repeated blanks vanish from caller text.** It removes leading blanks too, and collapses every inner run of blanks down to one. Caller-supplied text can legitimately carry leading or repeated blanks, and `condense( )` throws those away with no warning. Never reach for it to trim caller data; strip only what you mean to strip.
+**Leading and repeated blanks vanish from caller text.** `condense( )` removes leading blanks as well as trailing ones, and collapses every inner run of blanks down to one. Caller-supplied text can legitimately carry leading or repeated blanks, and `condense( )` throws those away with no warning. Never reach for it to trim caller data; strip only what you mean to strip.
 
 **Offset access past the end of a `string` raises.** `lv(1)` on an empty `string` (or any offset/length beyond `strlen( lv )`) raises `cx_sy_range_out_of_bounds`. It is catchable, but easy to hit by surprise on caller-supplied text that turned out empty or short. Check `strlen( lv )` before the access.
 
@@ -130,7 +130,7 @@ Cause: an uncaught exception short-dumps the work process, and ICF answers with 
 Do: catch `cx_root` at the handler boundary and answer 500 `{"code":"internal_error"}` (see the [handler skeleton](#handler-skeleton)). Go then sees a code and knows the two halves are talking. A caught exception leaves no ST22 entry, so record what you need (code, detail, `previous->get_text( )`) yourself. Only uncatchable errors still dump and still answer HTML, for example `TIME_OUT`, memory exhaustion (`TSV_TNEW_PAGE_ALLOC_FAILED`, also what runaway recursion ends in), a failed `ASSERT`, a conversion exit's `CONV_EXIT_FIELD_TOO_SHORT`, or an unhandled classic function-module exception. Large `SELECT`s are where the first two bite.
 
 **A deeply nested request body takes down the work process instead of failing with 400.**
-Cause: ABAP raises no catchable exception for recursion that runs too deep; the session exhausts its memory and short-dumps. A recursive parser that descends once per nesting level of a caller-supplied structure — nested JSON, a tree of filter conditions — runs out of stack on a deeply nested enough body and takes the work process down with a short dump: an HTML 500 (see above) for a request body, which Go and anything watching the system reads as a fault rather than a bad request. A limit on the parsed result's node count or size does not help here: by the time that check runs, the tree is already built and the recursion has already happened.
+Cause: ABAP raises no catchable exception for recursion that runs too deep; the session exhausts its memory and short-dumps. A recursive parser that descends once per nesting level of a caller-supplied structure — nested JSON, a tree of filter conditions — does exactly that on a deeply nested enough body, taking the work process down: an HTML 500 (see above) for a request body, which Go and anything watching the system reads as a fault rather than a bad request. A limit on the parsed result's node count or size does not help here: by the time that check runs, the tree is already built and the recursion has already happened.
 Do: give the parser an explicit maximum nesting depth and check it **before** each recursive call, not on the result afterwards. Add a node-count limit alongside it for breadth; a depth limit alone does not bound a wide-but-shallow body.
 
 **A conversion exit takes down the work process instead of raising an exception.**
@@ -400,7 +400,7 @@ ENDCLASS.
 `cl_sxml_string_reader` pull-parses the same vocabulary the writer above emits, and it has two traps of its own.
 
 **A typed element reads back as `'name'` for every member, whatever its real JSON type.**
-Cause: the element name **is** the JSON type (`str`, `num`, `object`, …), exactly as on the writing side, but `next_attribute( )` overwrites the reader's `->name` with the attribute's own name. Reading `->name` after looping the element's attributes instead of before it returns the string `'name'` for every object member (array items carry no attribute and read correctly) — it type-checks and is wrong everywhere.
+Cause: the element name **is** the JSON type (`str`, `num`, `object`, …), exactly as on the writing side, but `next_attribute( )` overwrites the reader's `->name` with the attribute's own name. Reading `->name` after looping the element's attributes instead of before it returns the string `'name'` for every object member (array items carry no attribute and read correctly) — it type-checks and is wrong for every member.
 Do: read `io_reader->name` immediately after `co_nt_element_open`, before looping `next_attribute( )`.
 
 **A long string value comes back truncated, with no error.**
