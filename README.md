@@ -318,7 +318,7 @@ Canonical codes live in [`btpingo`'s `httperr.go`](https://github.com/hochfreque
 
 ### Guard routes with scopes and correlate logs with a request ID
 
-The JWT middleware only checks signature, audience, and expiry.
+The JWT middleware checks signature, audience and the time claims: `exp` (required), `nbf`, and `iat` (a token issued in the future, beyond the 30 s leeway, is rejected).
 It does **not** enforce scopes, because this MWE ships no scope-gated route.
 The moment you add one, use `ginpingo.RequireScope(...)` rather than reading the `scope` claim by hand: the helper does exact-match (no `strings.Contains` trap where `Unauthorized-User` would match `User`) and produces the same 403 envelope as every other error in the repo.
 
@@ -460,7 +460,7 @@ Both can coexist on the same router group; pick one per handler — never mix th
 | Mutating without claim access                                                                                       | **gin** (default) | Same envelope shape as the rest of the typed-error story; consistent with the two existing mutating examples.         |
 | Tied — could go either way                                                                                          | **gin**           | Matches more existing examples (2 of 3); easier for fork-authors to consistency-check against the canonical patterns. |
 
-> **Error envelope.** Huma renders errors as RFC 7807 problem-details (`{"title":"Bad Gateway","status":502,"detail":"…"}`); the gin-style handlers use `btpingo.ErrorEnvelope` (`{"error":{"code":"upstream_unreachable","message":"…","request_id":"…"}}`). Aware mismatch: unifying both onto `btpingo.ErrorEnvelope` requires overriding `huma.NewError` AND propagating `request_id` into `context.Context`, which is the same adapter as the `ginpingo.ClaimsContextKey` follow-up. Until then, clients calling `/api/adt-discovery` see RFC 7807; clients calling `/api/adt-checkrun` see the typed envelope.
+> **Error envelope.** Huma renders errors as RFC 7807 problem-details (`{"title":"Bad Gateway","status":502,"detail":"…"}`); the gin-style handlers use `btpingo.ErrorEnvelope` (`{"error":{"code":"upstream_unreachable","message":"…","request_id":"…"}}`). Aware mismatch: unifying both onto `btpingo.ErrorEnvelope` requires overriding `huma.NewError` so it builds the envelope, reading the ID with `btpingo.RequestIDFromContext(ctx)`. The ID is already on `context.Context`: `ginpingo.RequestID()` puts it there. Until then, clients calling `/api/adt-discovery` see RFC 7807; clients calling `/api/adt-checkrun` see the typed envelope.
 
 ### Test your handler without touching SAP
 
@@ -730,7 +730,7 @@ Skipping this yields "redirect URI mismatch" on the first OAuth login.
 3. Security → **Users** → your user → add the new Role Collection.
 4. If you were already logged in through the approuter, log out (`/logout`) and back in so the new token carries the scope.
 
-The `/api/*` routes this MWE ships with do **not** enforce the `User` scope — the JWT middleware only validates signature, audience, and expiry, so a valid XSUAA user passes regardless of Role Collection. 5b matters the moment you add a scope-gated route (e.g. `c.MustGet(ginpingo.ClaimsContextKey)` then checking `scope` contains `User`); without 5b, that route would 403 even though login succeeds.
+The `/api/*` routes this MWE ships with do **not** enforce the `User` scope — the JWT middleware validates signature, audience and the time claims (`exp`, `nbf`, `iat`) but not scopes, so a valid XSUAA user passes regardless of Role Collection. 5b matters the moment you add a scope-gated route (e.g. `c.MustGet(ginpingo.ClaimsContextKey)` then checking `scope` contains `User`); without 5b, that route would 403 even though login succeeds.
 
 </details>
 
