@@ -194,7 +194,7 @@ the spec's bit-rot claim does not hold.
 
 ## Verification
 
-- `go test ./cmd/server/ -run TestRouter` passes against the shipped route
+- `go test ./cmd/server/ -run Test_RouterAllowList` passes against the shipped route
   set (allow-list pinned from first-run `r.Routes()` output, including the
   two huma `-3.0` downgrade routes).
 - Adding a stray `api.GET("/stray", ...)` to `buildRouter` fails the test

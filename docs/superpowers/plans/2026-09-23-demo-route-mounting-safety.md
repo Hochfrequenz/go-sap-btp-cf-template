@@ -403,7 +403,7 @@ Expected: all PASS.
 
 - [ ] **Step 2: Confirm the spec's Verification criteria**
 
-- `go test ./cmd/server/ -run TestRouter` passes against the shipped route set (allow-list pinned from first-run `r.Routes()`, including the two huma `-3.0` downgrade routes). — Run it; confirm PASS.
+- `go test ./cmd/server/ -run Test_RouterAllowList` passes against the shipped route set (allow-list pinned from first-run `r.Routes()`, including the two huma `-3.0` downgrade routes). — Run it; confirm PASS.
 - Adding a stray `api.GET("/stray", ...)` to `buildRouter` fails the test with a message naming the unexpected route. — Done in Task 2 Step 5; re-confirm once.
 - `main()` still compiles passing its real `*btp.JWTValidator`. — `go build ./cmd/server/` confirms.
 - `template-guards.yml`'s manual-chores gate enforces the new row: removing both `Register` calls makes the appended `PATTERNS` entry return 0 hits and the gate fails. — Done in Task 4 Step 2; the local simulation confirms.
