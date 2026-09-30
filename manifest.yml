@@ -6,8 +6,8 @@
 # env var. CF manifest vars keep us from hard-coding the region/account.
 applications:
 
-  # Go backend — talks to the on-premise SAP system. Not meant to be hit
-  # directly by end users; the approuter is the public entry point.
+  # Go backend — talks to the on-premise SAP system. Browser users reach
+  # it through the approuter below, but it also has its own public route.
   #
   # We use binary_buildpack deliberately: the classic go_buildpack invokes
   # the Go toolchain on the CF stager, which on eu10 OOMs with Go 1.27 +
@@ -46,11 +46,9 @@ applications:
   # against XSUAA and forwards the resulting JWT to the Go backend via the
   # JSON-defined destination below.
   #
-  # Optional: it's on by default and there's no config switch, but nothing
-  # about the backend requires it. A fork with only machine/API clients can
-  # delete this whole app block (and web/, and the redirect-uris step in the
-  # README) and call the backend directly with a bearer token instead.
-  # See README §"Do you need the approuter?".
+  # Optional: on by default, no config switch. Forks with only machine
+  # clients can drop it — see README §"Do you need the approuter?" for
+  # the full list of edits.
   - name: ((backend-host))-web
     path: web
     memory: 128M

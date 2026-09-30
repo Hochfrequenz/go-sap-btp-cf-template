@@ -122,10 +122,7 @@ jobs:
         run: |
           cf push "$BACKEND_HOST" -f manifest.yml --vars-file vars.yml
 
-      # Skippable: a fork with no browser users can drop this step and the
-      # "-web" app block in manifest.yml — see README §"Do you need the
-      # approuter?". If you do, point the smoke test below at
-      # "https://${BACKEND_HOST}.${DOMAIN}" instead.
+      # Optional — see README §"Do you need the approuter?" for dropping it.
       - name: cf push — approuter (nodejs_buildpack per manifest)
         run: |
           cf push "${BACKEND_HOST}-web" -f manifest.yml --vars-file vars.yml

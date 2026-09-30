@@ -72,25 +72,35 @@ turn it off — but nothing about the backend requires it, and a fork is free to
 
 - The XSUAA OAuth auth-code login flow and a session cookie (`JSESSIONID`), so a signed-in browser
   user does not have to handle tokens itself.
-- CSRF protection on routes where it's enabled (the approuter's own default; this template's
-  `web/xs-app.json` explicitly turns it off for `/api/*` because the Go backend does its own CSRF
-  handshake for on-prem writes — see ["Calling SAP with a POST / CSRF"](#calling-sap-with-a-post--csrf)).
+- CSRF protection (`X-CSRF-Token`) for session-cookie requests — the approuter's per-route default,
+  but **off** in this template: `web/xs-app.json` sets `csrfProtection: false` on `/api/*`, so a
+  browser `POST` such as `/api/adt-checkrun` is not CSRF-checked. (The handshake in
+  ["Calling SAP with a POST / CSRF"](#calling-sap-with-a-post--csrf) is the backend's _outbound_
+  call to SAP; it does not protect `/api/*`.)
 - Forwarding of the resulting JWT to the Go backend as `Authorization: Bearer <jwt>`, via the
   `forwardAuthToken: true` destination in `manifest.yml`.
 
-**What you lose without it** — and what to do instead, for an API-only fork whose consumers are
-machine clients (`client_credentials`, no browser):
+**Without it**, for an API-only fork whose consumers are machine clients:
 
-- No browser login/session; callers fetch their own XSUAA `client_credentials` token and call the
-  backend route directly (`https://((backend-host)).((domain))/api/...`) with
-  `Authorization: Bearer <token>`. Nothing in the Go backend's JWT validation (`btpingo`'s
-  `auth.go`) depends on the approuter having been in the request path.
-- To remove it: drop the `((backend-host))-web` app block from `manifest.yml`, delete `web/`
-  (`xs-app.json`, `package.json`), remove the `cf push … -web` step and its smoke test from
-  `.github/workflows/deploy.yml` (point the remaining smoke test at
-  `https://((backend-host)).((domain))` instead), drop the `web/package.json` rewriter call in
-  `cmd/apply-config/rewriters.go` (and its test), and skip §5a below (there is no approuter
-  redirect URI to register).
+- Callers get a `client_credentials` token from this app's XSUAA instance (a service key:
+  `cf create-service-key go-xsuaa <key>`, then `cf service-key go-xsuaa <key>`) and call
+  `https://((backend-host)).((domain))/api/...` with `Authorization: Bearer <token>`. The backend
+  checks signature, audience and expiry (`btpingo`'s `auth.go`) the same way either way.
+- Such a token carries no user: `user_name`/`email` claims are absent, Principal Propagation has no
+  user JWT to forward, and `/api/docs` can no longer be opened in a browser.
+
+**To remove it:**
+
+1. `manifest.yml`: delete the `((backend-host))-web` app block (it carries the `GoBackend`
+   destination).
+2. Delete `web/`.
+3. `.github/workflows/deploy.yml`: delete the approuter `cf push` step; in the smoke-test step set
+   `base="https://${BACKEND_HOST}.${DOMAIN}"`.
+4. `cmd/apply-config/rewriters.go`: delete the `web/package.json` entry in `singleFileRewriters`
+   and the then-unused `transformPackageJson` (golangci-lint's `unused` fails otherwise);
+   delete `Test_transformPackageJson_RewritesTopLevelNameOnly` in `rewriters_test.go`.
+5. Skip §5a; leave `xs-security.json`'s `redirect-uris` as `[]` (a template-guards check requires
+   it).
 
 **Not an isolation boundary as shipped.** The backend app has its own public `cfapps` route (no
 `routes:`/`no-route`/`apps.internal` restriction in `manifest.yml`), and the approuter reaches it
@@ -890,7 +900,7 @@ Why `/sap/bc/adt/discovery` as the probe: it's a standard ABAP Development Tools
 
 ## Continuous deployment
 
-`.github/workflows/deploy.yml` deploys both apps on every **published GitHub Release** (not on push-to-main, not on plain tag pushes — only the explicit "Publish release" click). "Both apps" assumes the approuter is kept; a fork that dropped it (see ["Do you need the approuter?"](#do-you-need-the-approuter)) removes the `-web` push step and points the smoke test at the backend host directly. The workflow has two jobs:
+`.github/workflows/deploy.yml` deploys both apps on every **published GitHub Release** (not on push-to-main, not on plain tag pushes — only the explicit "Publish release" click). "Both apps" assumes the approuter is kept — see ["Do you need the approuter?"](#do-you-need-the-approuter). The workflow has two jobs:
 
 1. **`gate`** — `go vet`, `go test ./... -race`, `golangci-lint`, `gofmt --diff`. All four must pass green.
 2. **`deploy`** — only runs if `gate` was green. Cross-compiles a static Linux binary on the runner (same `make build-linux` a laptop would run), injects build metadata via `-ldflags` (`version`, `commit`, `branch`, `build_date`), installs `cf` v8, pushes backend and approuter per `manifest.yml` (backend is already `binary_buildpack` with `command: ./bin/server`, approuter keeps `nodejs_buildpack`), then smoke-tests `/healthz` (app is up) and `/version` (ldflags were actually injected — `commit` must not equal `"unknown"`), and fails the workflow if either check doesn't pass.
@@ -1034,7 +1044,7 @@ Compression alone would otherwise open a length-mismatch gap in both directions:
 You do not need this section to write a handler. It is here for when a deploy misbehaves, a token doesn't validate, or you want to understand what `svc.CallOnPremise` actually does on the wire.
 
 Two CF applications share one XSUAA instance. The approuter is the browser-facing front door; the Go backend is the thing that actually talks to the on-premise SAP system. The Destination and Connectivity services are bound only to the backend.
-The sequence below assumes the approuter is kept (see ["Do you need the approuter?"](#do-you-need-the-approuter)); drop it and step 2 becomes the caller fetching its own `client_credentials` token from XSUAA before calling the backend.
+The sequence below assumes the approuter is kept (see ["Do you need the approuter?"](#do-you-need-the-approuter)); without it, steps 1–4 collapse to the caller fetching a client_credentials token from XSUAA and calling the backend directly with it.
 
 ```mermaid
 sequenceDiagram
