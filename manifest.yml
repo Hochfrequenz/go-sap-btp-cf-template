@@ -45,6 +45,12 @@ applications:
   # SAP approuter — the browser-facing front door. Runs OAuth auth-code flow
   # against XSUAA and forwards the resulting JWT to the Go backend via the
   # JSON-defined destination below.
+  #
+  # Optional: it's on by default and there's no config switch, but nothing
+  # about the backend requires it. A fork with only machine/API clients can
+  # delete this whole app block (and web/, and the redirect-uris step in the
+  # README) and call the backend directly with a bearer token instead.
+  # See README §"Do you need the approuter?".
   - name: ((backend-host))-web
     path: web
     memory: 128M

@@ -19,6 +19,10 @@ app:
   # CF backend app name. The approuter is auto-derived as <name>-web
   # (see manifest.yml). Must follow CF app-name rules: lowercase
   # alphanumeric with hyphens, no leading or trailing hyphen.
+  #
+  # The approuter is optional (README §"Do you need the approuter?"); if
+  # your fork drops it, the "-web" derivation and web/package.json rewrite
+  # below simply don't apply — delete web/ and skip them.
   name: go-btp-mwe
 
   # Go module path — exactly what ends up in go.mod and in every Go

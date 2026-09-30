@@ -38,6 +38,9 @@ flowchart LR
     style CC fill:#e9ecef,stroke:#6c757d,stroke-dasharray:5 5,color:#495057
 ```
 
+The approuter (`AR`) ships and deploys by default, but it is not required — see
+["Do you need the approuter?"](#do-you-need-the-approuter) below.
+
 > 🪧 First time here?
 >
 > - Just forked and need to configure → [Using this repo as a template](#using-this-repo-as-a-template)
@@ -47,22 +50,63 @@ flowchart LR
 
 ## Table of contents
 
-1. [Repository layout](#repository-layout)
-2. [Using this repo as a template](#using-this-repo-as-a-template)
-3. [Adding your service — the 80 % case](#adding-your-service--the-80--case)
-4. [Deployment](#deployment)
-5. [Continuous deployment](#continuous-deployment)
-6. [Local development](#local-development)
-7. [Extension points](#extension-points)
-8. [What this MWE deliberately does _not_ do](#what-this-mwe-deliberately-does-not-do)
-9. [How it works under the hood](#how-it-works-under-the-hood)
-10. [References](#references)
+1. [Do you need the approuter?](#do-you-need-the-approuter)
+2. [Repository layout](#repository-layout)
+3. [Using this repo as a template](#using-this-repo-as-a-template)
+4. [Adding your service — the 80 % case](#adding-your-service--the-80--case)
+5. [Deployment](#deployment)
+6. [Continuous deployment](#continuous-deployment)
+7. [Local development](#local-development)
+8. [Extension points](#extension-points)
+9. [What this MWE deliberately does _not_ do](#what-this-mwe-deliberately-does-not-do)
+10. [How it works under the hood](#how-it-works-under-the-hood)
+11. [References](#references)
+
+## Do you need the approuter?
+
+The template ships two CF apps: the Go backend (`((backend-host))`) and the approuter
+(`((backend-host))-web`, `web/`). The approuter is on by default and there is no config switch to
+turn it off — but nothing about the backend requires it, and a fork is free to drop it.
+
+**What the approuter gives you**, if your consumers are browsers:
+
+- The XSUAA OAuth auth-code login flow and a session cookie (`JSESSIONID`), so a signed-in browser
+  user does not have to handle tokens itself.
+- CSRF protection on routes where it's enabled (the approuter's own default; this template's
+  `web/xs-app.json` explicitly turns it off for `/api/*` because the Go backend does its own CSRF
+  handshake for on-prem writes — see ["Calling SAP with a POST / CSRF"](#calling-sap-with-a-post--csrf)).
+- Forwarding of the resulting JWT to the Go backend as `Authorization: Bearer <jwt>`, via the
+  `forwardAuthToken: true` destination in `manifest.yml`.
+
+**What you lose without it** — and what to do instead, for an API-only fork whose consumers are
+machine clients (`client_credentials`, no browser):
+
+- No browser login/session; callers fetch their own XSUAA `client_credentials` token and call the
+  backend route directly (`https://((backend-host)).((domain))/api/...`) with
+  `Authorization: Bearer <token>`. Nothing in the Go backend's JWT validation (`btpingo`'s
+  `auth.go`) depends on the approuter having been in the request path.
+- To remove it: drop the `((backend-host))-web` app block from `manifest.yml`, delete `web/`
+  (`xs-app.json`, `package.json`), remove the `cf push … -web` step and its smoke test from
+  `.github/workflows/deploy.yml` (point the remaining smoke test at
+  `https://((backend-host)).((domain))` instead), drop the `web/package.json` rewriter call in
+  `cmd/apply-config/rewriters.go` (and its test), and skip §5a below (there is no approuter
+  redirect URI to register).
+
+**Not an isolation boundary as shipped.** The backend app has its own public `cfapps` route (no
+`routes:`/`no-route`/`apps.internal` restriction in `manifest.yml`), and the approuter reaches it
+over that same public URL via the `GoBackend` destination — so the backend is reachable directly
+regardless of whether the approuter is kept. Making the approuter the only way in would need
+`apps.internal` routing, which this template does not set up.
+
+**Cost of keeping it:** one more CF app, one more route (see the route-quota check under
+["Pre-flight gotchas"](#pre-flight-gotchas)), 128 MB memory. The interactive OpenAPI docs at
+`/api/docs` are JWT-gated either way, approuter or not.
 
 ## Repository layout
 
 ```
 cmd/server/main.go          Gin entry point; graceful shutdown; structured logs
-web/                        SAP approuter
+web/                        SAP approuter — on by default, optional (web/README.md)
   package.json              pulls @sap/approuter
   xs-app.json               routes /api/* to the Go backend destination
 manifest.yml                two CF apps + service bindings (uses manifest vars)
@@ -137,6 +181,8 @@ flowchart LR
 ```
 
 Green and yellow boxes are where you work; the dashed grey box is plumbing that comes with the template.
+This diagram assumes the approuter is kept (browser user); an API-only fork calls the Go backend
+directly with a bearer token instead — see ["Do you need the approuter?"](#do-you-need-the-approuter).
 
 ---
 
@@ -633,7 +679,8 @@ Two conventions to keep in mind while reading this section:
 
 1. **Org-level route quota, not space-level.**
    `cf routes` only lists the currently-targeted space, but the route quota is an **org-wide** limit.
-   Before `cf push`, confirm at least **two** free route slots (one per app — backend + approuter):
+   Before `cf push`, confirm at least **two** free route slots (one per app — backend + approuter;
+   only one if you've dropped the approuter, see ["Do you need the approuter?"](#do-you-need-the-approuter)):
 
    ```sh
    # Set this to the name shown under "org:" in 'cf target' (HF example: "HF Dev Account_hf-cf"):
@@ -715,6 +762,9 @@ Expand the step you're on:
 <details>
 <summary>5a. Update XSUAA redirect URIs — makes OAuth login not bounce with "redirect URI mismatch"</summary>
 
+Only applies if you kept the approuter — see ["Do you need the approuter?"](#do-you-need-the-approuter).
+An API-only fork with no browser login has no redirect URI to register and can skip this step.
+
 The shipped `xs-security.json` has an empty `redirect-uris` array — we cannot know the approuter's URL until the first push. After deploy:
 
 1. Find the approuter route: `cf app go-btp-mwe-web` (it prints the `routes:` — note the HTTPS URL).
@@ -764,6 +814,8 @@ Once this exists (and a handler that references it by name is wired in `buildRou
 ### 6. Smoke tests
 
 Three layered checks, running in order. If one fails, the earlier ones still isolate where in the chain things broke. Substitute `<approuter-host>` and `<domain>` for your deploy — typically `go-btp-mwe-web` and e.g. `cfapps.eu10.hana.ondemand.com`.
+All three assume the approuter is kept; without it (see ["Do you need the approuter?"](#do-you-need-the-approuter)),
+hit `https://<backend-host>.<domain>` directly and use a `client_credentials` bearer token instead of 6b's browser login.
 
 <details>
 <summary>6a. <code>/healthz</code> — approuter reaches the Go backend (no auth)</summary>
@@ -838,7 +890,7 @@ Why `/sap/bc/adt/discovery` as the probe: it's a standard ABAP Development Tools
 
 ## Continuous deployment
 
-`.github/workflows/deploy.yml` deploys both apps on every **published GitHub Release** (not on push-to-main, not on plain tag pushes — only the explicit "Publish release" click). The workflow has two jobs:
+`.github/workflows/deploy.yml` deploys both apps on every **published GitHub Release** (not on push-to-main, not on plain tag pushes — only the explicit "Publish release" click). "Both apps" assumes the approuter is kept; a fork that dropped it (see ["Do you need the approuter?"](#do-you-need-the-approuter)) removes the `-web` push step and points the smoke test at the backend host directly. The workflow has two jobs:
 
 1. **`gate`** — `go vet`, `go test ./... -race`, `golangci-lint`, `gofmt --diff`. All four must pass green.
 2. **`deploy`** — only runs if `gate` was green. Cross-compiles a static Linux binary on the runner (same `make build-linux` a laptop would run), injects build metadata via `-ldflags` (`version`, `commit`, `branch`, `build_date`), installs `cf` v8, pushes backend and approuter per `manifest.yml` (backend is already `binary_buildpack` with `command: ./bin/server`, approuter keeps `nodejs_buildpack`), then smoke-tests `/healthz` (app is up) and `/version` (ldflags were actually injected — `commit` must not equal `"unknown"`), and fails the workflow if either check doesn't pass.
@@ -982,6 +1034,7 @@ Compression alone would otherwise open a length-mismatch gap in both directions:
 You do not need this section to write a handler. It is here for when a deploy misbehaves, a token doesn't validate, or you want to understand what `svc.CallOnPremise` actually does on the wire.
 
 Two CF applications share one XSUAA instance. The approuter is the browser-facing front door; the Go backend is the thing that actually talks to the on-premise SAP system. The Destination and Connectivity services are bound only to the backend.
+The sequence below assumes the approuter is kept (see ["Do you need the approuter?"](#do-you-need-the-approuter)); drop it and step 2 becomes the caller fetching its own `client_credentials` token from XSUAA before calling the backend.
 
 ```mermaid
 sequenceDiagram
