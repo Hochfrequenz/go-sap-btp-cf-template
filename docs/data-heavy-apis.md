@@ -12,9 +12,6 @@ section](abap-backend-playbook.md#4-data-heavy-endpoints-considerations). Read b
 designing the endpoint end to end; they're written for different audiences (this one for the Go
 side, that one for whoever writes the ABAP side) and deliberately don't repeat each other.
 
-Everything below was checked against `github.com/hochfrequenz/btpingo v0.1.1` (the version pinned
-in this repo's `go.mod`) and this repo at commit `03297a9`.
-
 ## The on-premise response cap
 
 `btpingo.DefaultOnPremResponseSizeLimit` caps how much of an on-premise response `*btpingo.Service`
@@ -38,27 +35,35 @@ matter whether the caller buffers with `io.ReadAll` or streams with `io.Copy` /
 
 - **Buffering** (`io.ReadAll`): the error surfaces from the `ReadAll` call itself, before any
   response has gone to the client. A handler can still turn it into a clean `502`.
-- **Streaming** (`io.Copy`, `c.DataFromReader`, or `ginpingo.ProxyHandler`, which uses `io.Copy`
-  internally): the `200` status and headers are already written by the time the copy trips the
-  cap, so the client gets a **truncated body under a success status**. With a `Content-Length`
-  header the client at least sees a short read and can detect it; a chunked response (no
-  `Content-Length`, which is what `c.DataFromReader` sends when `resp.ContentLength` is `-1`) can
-  end up looking like a complete response to a client that doesn't check for a terminating
-  marker. Build your response format so truncation is detectable (see "Payload shape" below), or
-  keep pages small enough that hitting the cap mid-page is not an expected occurrence you need to
-  detect.
+- **Streaming** (`c.DataFromReader`, `io.Copy`, `ginpingo.ProxyHandler`): the `200` and headers are
+  already sent when the cap trips. If a `Content-Length` was forwarded, `contentLengthGuard` in
+  `cmd/server/main.go` sees the short write and aborts the connection, so the client gets an
+  unexpected EOF, with or without compression. If there is none — always the case for a typed
+  handler, whose transport-decompressed body has `ContentLength == -1` — the response ends
+  cleanly: a proper final chunk or a complete gzip/zstd stream, just shorter. No HTTP-level check
+  can tell it apart from a complete response. Only the payload itself can (see "Payload shape").
+  The same happens if `DefaultOnPremiseTimeout` fires mid-body (see "Timeouts").
 
 The response write itself also counts against the server's `WriteTimeout` — a large page that's
 slow to write can hit that timeout as well as, or instead of, the size cap.
+
+**What the cap counts depends on who asked for compression.** A typed handler (all three examples)
+forwards no `Accept-Encoding`, so Go's transport requests gzip itself, decompresses transparently,
+and the cap measures **decompressed** bytes. `ginpingo.ProxyHandler` forwards the client's
+`Accept-Encoding`. If SAP compresses, the body is passed through undecoded and the cap measures
+**compressed** bytes, so the same endpoint can succeed for a browser and hit the cap for `curl`
+without `--compressed`. Size the limit for the decompressed payload.
 
 ## Buffering vs. streaming
 
 This repo's three example handlers show both patterns:
 
-- `examples/adtdiscovery` and `examples/adtcheckrun` call `io.ReadAll(resp.Body)`, then unmarshal
-  the buffered bytes (XML in both cases) and re-marshal a reshaped JSON view. Fine for the small,
-  fixed-shape ADT payloads these handlers target.
-- `examples/invoicesync` calls `c.DataFromReader(resp.StatusCode, resp.ContentLength,
+- [examples/adtdiscovery](../examples/adtdiscovery/handler.go) and
+  [examples/adtcheckrun](../examples/adtcheckrun/handler.go) call `io.ReadAll(resp.Body)`, then
+  unmarshal the buffered bytes (XML in both cases) and re-marshal a reshaped JSON view. Fine for the
+  small, fixed-shape ADT payloads these handlers target.
+- [examples/invoicesync](../examples/invoicesync/handler.go) calls
+  `c.DataFromReader(resp.StatusCode, resp.ContentLength,
 resp.Header.Get("Content-Type"), resp.Body, nil)` — it streams SAP's response bytes straight
   through without buffering or reshaping them.
 
@@ -71,22 +76,22 @@ The difference is a size-driven choice, and each pattern has a real limit:
   instead, which is a different, more involved implementation than either example ships.
 - **`c.DataFromReader` verbatim streaming** (`invoicesync`'s pattern) only works when the on-premise
   system already emits exactly the bytes the client should receive — it can't reshape the payload
-  in flight. It's also the right template to copy for `ginpingo.ProxyHandler`-style transparent
-  proxying. Note `invoicesync` is a reference example only: it is not wired into `cmd/server`'s
+  in flight. Note `invoicesync` is a reference example only: it is not wired into `cmd/server`'s
   router today (see the comment at the top of `examples/adtdiscovery/handler.go`, which explains why
   only `adtdiscovery`/`adtcheckrun` are).
 
 **Memory math.** `manifest.yml`'s backend app defaults to `memory: 128M` with
 `GOMEMLIMIT: 100MiB` — see [the "Body-size cap" section](../README.md#body-size-cap) for why the two
-are tied together and must be raised as a pair. Buffering holds one full response in memory per
-in-flight request; with concurrent requests, that's roughly `(number of concurrent large requests) ×
-(response size)` competing for the same `GOMEMLIMIT` budget, on top of everything else the process
-holds (goroutine stacks, the JSON encoder's own buffers, HTTP/response framing, GC headroom).
+are tied together and must be raised as a pair. Budget about **3× the payload per in-flight buffered
+request**, not 1×: the raw bytes, the decoded structs, and for a reshaping handler the re-encoded
+output. Measured with go1.27: a 20 MB JSON time-series array reached 47–64 MiB of peak heap for
+`ReadAll` + `Unmarshal` (+ `Marshal`). That is more than half of the default `GOMEMLIMIT` for one
+request, so at the defaults a second concurrent one pushes the process into GC thrashing or an OOM
+kill. Size `memory:`/`GOMEMLIMIT` for `(max concurrent requests on the route) × 3 × (raised limit)`.
 Streaming keeps a single request's incremental memory use close to `io.Copy`'s buffer size (32 KiB
-per copy by default) regardless of the total response size, which is what makes it the correct
-choice once responses stop being small and fixed-size. If you do raise `WithOnPremResponseSizeLimit`
-and buffer anyway, size `memory:`/`GOMEMLIMIT` for the worst case of `(max concurrent requests to
-that route) × (raised limit)`, not for one request at a time.
+per copy by default, plus the per-response compressor state; gzhttp's zstd encoder uses a 128 KiB
+window) regardless of the total response size, which is what makes it the correct choice once
+responses stop being small and fixed-size.
 
 ## Timeouts across the chain
 
@@ -100,46 +105,46 @@ returned promptly, and a single route that legitimately needs longer gets the sa
 `*btpingo.Service` built via `btpingo.WithOnPremiseTimeout(...)` for that route, rather than
 loosening the global defaults.
 
-Two more hops sit in the same request path and are not something this repo's code sets or measures:
-the **Cloud Connector** tunnel and the **approuter**. The README's Timeouts section already notes
-that CF's Gorouter has its own per-request ceiling (typically around 900 s, varies by foundation)
-that the 900 s `WriteTimeout` is aligned with. Whether the Cloud Connector or the approuter impose a
-tighter ceiling of their own, and what a specific BTP subaccount's Gorouter timeout actually is —
-**check for your landscape**; this repo doesn't pin a verified number for either.
+For a streamed response the whole body transfer counts against `DefaultOnPremiseTimeout` too, since
+`http.Client.Timeout` includes reading the body. A 10-minute stream is cut at 600 s, mid-body,
+before `WriteTimeout` is reached.
+
+Two more hops sit in the path. **The approuter** (`@sap/approuter` 23.0.0) gives each destination a
+default `timeout` of 30 000 ms, an inactivity timer on the backend connection that answers 504 when
+it fires. `manifest.yml`'s `GoBackend` destination sets none, so a request through the approuter
+fails after 30 s of silence from this backend, long before `DefaultOnPremiseTimeout` or
+`WriteTimeout` matter. Nothing flows until SAP has answered, and an ABAP handler answers only once
+the whole page is built. For a slow route, add `"timeout": <ms>` to the `GoBackend` entry in
+`manifest.yml`, or keep pages small enough to answer well inside 30 s. **The Cloud Connector** may
+have its own ceiling. This repo doesn't set it — check for your landscape.
 
 ## Compression
 
 [The "Response compression" section](../README.md#response-compression) covers what `gzhttp` does
-at the `http.Server.Handler` level (zstd/gzip negotiated per `Accept-Encoding`, `contentLengthGuard`
-closing the length-mismatch gap). Two things specific to a proxied on-premise response:
+at the `http.Server.Handler` level — this doesn't restate it. One thing specific to a proxied
+on-premise response:
 
 - `ginpingo.ProxyHandler` forwards the inbound request's `Accept-Encoding` header to the on-premise
   call (it's not in the internal header-drop list `internal/fwdheader` applies to both the outbound
   request and the relayed response), and relays the on-premise response's `Content-Encoding` header
   back to the client unchanged. If ABAP already gzips its response, that compression survives the
   proxy hop as-is.
-- `gzhttp` already skips a response a handler already compressed itself — a proxied on-premise body
-  that already carries a `Content-Encoding` isn't compressed a second time.
-
-For a data-heavy endpoint that doesn't use `ginpingo.ProxyHandler` (a typed handler that reshapes
-the response, for instance), the gzip/zstd wrapping at the `http.Server.Handler` level applies the
-same way regardless of how the handler builds its response body.
 
 ## Payload shape for time series
 
-- **NDJSON or CSV over a single large JSON array.** A JSON array needs the whole array serialized
-  (or a streaming JSON array encoder, which most standard-library-adjacent JSON code doesn't give
-  you for free) before the closing `]` — the writer effectively needs the whole page assembled. NDJSON
-  (one JSON object per line) and CSV can both be written and read one row at a time, which matches a
-  keyset-paginated or streamed source row-for-row and also gives truncation a detectable shape: a
-  response cut off mid-stream ends with a partial line instead of ending exactly where the array's
-  closing bracket should be.
+- **NDJSON (or CSV) with an explicit trailer.** Rows can be produced and consumed one at a time. On
+  the Go side a JSON array can be streamed too (`json.Decoder.Token`/`More`), but NDJSON also lets a
+  client use rows before the response ends. Neither format makes truncation reliably detectable: a
+  cut on a line boundary looks complete. So end every page with a trailer record, e.g.
+  `{"end":true,"rows":N,"next":"<cursor>"}`, and have clients treat a missing trailer as failure. For
+  a verbatim stream (`invoicesync`'s pattern) the trailer has to come from the ABAP side.
 - **Timestamps:** pick one format and use it consistently end to end — ISO 8601 in UTC (e.g.
   `2026-09-30T12:00:00Z`) is the common choice and avoids ambiguity around local time / DST that a
   Go client, a JS client and an ABAP-side date/time pair can each get wrong differently. This repo
   doesn't currently standardize a timestamp format anywhere else, so this is a decision your fork
   makes once and documents for its own API.
-- **Decimals as JSON strings.** JSON numbers are IEEE-754 doubles; a SAP `DEC`/`CURR`/`QUAN` value
+- **Decimals as JSON strings.** Most parsers (JavaScript's, Go's default decoding into `float64`)
+  read JSON numbers as IEEE-754 doubles; a SAP `DEC`/`CURR`/`QUAN` value
   round-tripped through a JSON number can lose precision on the low digits. Send decimals as
   strings (`"123.45"` rather than `123.45`) if exact round-tripping matters for the field, and say so
   in your API contract so clients parse them as decimals rather than floats.
@@ -154,12 +159,15 @@ endpoints" section](abap-backend-playbook.md#4-data-heavy-endpoints-consideratio
 (timestamps, decimals) has to agree between the two sides, which is exactly the contract described
 above.
 
+Make the cursor a **unique** key: if several series share a timestamp, carry `(series id,
+timestamp)`, not the timestamp alone, or rows are lost or duplicated at page boundaries. Use
+half-open windows (`from` inclusive, `to` exclusive). Enforce a server-side maximum page size that
+fits under the size cap and the approuter timeout.
+
 ## Sizing memory and instances
 
 Raise `memory:` and `GOMEMLIMIT` together, as already covered in [the "Body-size cap"
-section](../README.md#body-size-cap) — do not raise one without the other, and the
-`GOMEMLIMIT`-vs-`memory:` gate in `.github/workflows/template-guards.yml` will fail the build if
-`GOMEMLIMIT` is missing, malformed, `off`, below 16 MiB, or not strictly below `memory:`. Size the
+section](../README.md#body-size-cap) — this doesn't restate the gate that enforces it. Size the
 increase for the memory math above: the worst case is concurrent large in-flight requests, not one
 request at a time, so a route that's expected to see concurrent traffic needs proportionally more
 headroom than a single-worst-case response size would suggest. How much memory and how many
