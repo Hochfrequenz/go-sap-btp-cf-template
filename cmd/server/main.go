@@ -169,37 +169,62 @@ func compress(h http.Handler) http.Handler {
 }
 
 // contentLengthGuard sits BETWEEN gzhttp and the wrapped handler
-// (Handler: compress(contentLengthGuard(r))) and closes a truncation gap
-// gzhttp does not cover on its own: if a handler announces a
-// Content-Length and then writes fewer bytes than that before returning
-// — e.g. a proxied on-prem response whose connection drops mid-io.Copy —
-// gzhttp still frames a syntactically complete gzip/zstd stream around
-// whatever partial bytes it saw and closes it cleanly. The client then
-// sees a valid, fully-decodable 200 response that is silently short: the
-// exact failure mode compression must not introduce, since an
+// (Handler: compress(contentLengthGuard(r))) and closes a Content-Length
+// mismatch gap gzhttp does not cover on its own, in either direction:
+//
+//   - Short: a handler announces a Content-Length and then writes fewer
+//     bytes than that before returning — e.g. a proxied on-prem response
+//     whose connection drops mid-io.Copy. gzhttp still frames a
+//     syntactically complete gzip/zstd stream around whatever partial
+//     bytes it saw and closes it cleanly. The client then sees a valid,
+//     fully-decodable 200 response that is silently short.
+//   - Overlong: a handler keeps writing past its own declared
+//     Content-Length. net/http's own ErrContentLength enforcement only
+//     fires when a Content-Length header is actually on the wire to the
+//     client, but gzhttp removes that header the moment it starts
+//     compressing — so with compression active, the extra bytes are
+//     framed straight into the compressed stream and reach the client as
+//     a clean response containing more than the handler declared.
+//
+// Both are the exact failure mode compression must not introduce: an
 // uncompressed response in the same situation reaches the client as a
 // broken connection (unexpected EOF), not a clean 200.
 //
 // The guard tracks the announced Content-Length and the bytes actually
-// written; if fewer bytes were written when the handler returns, it
+// written; if the handler returns having written a different number of
+// bytes than it declared — fewer (a dropped on-prem connection) OR more
+// (a handler that keeps writing past its own declared length) — it
 // panics with http.ErrAbortHandler. net/http's server recovers that
 // panic itself, logs nothing (by design — it is the documented
 // "silently abort" signal), and closes the connection without writing a
 // final chunk/frame terminator. That reproduces the same client-visible
-// unexpected-EOF failure a truncated uncompressed response would have
-// produced, instead of a clean-looking short body.
+// unexpected-EOF failure an uncompressed response of the same shape
+// would have produced, instead of a clean-looking short OR overlong
+// body.
+//
+// The overlong case matters specifically because of gzhttp: once
+// compression kicks in, gzhttp removes the Content-Length header from
+// the response it sends, so net/http's own ErrContentLength enforcement
+// (which only fires when a Content-Length header is actually on the
+// wire) never sees a mismatch — the extra bytes would otherwise reach
+// the client as a clean, fully-decodable compressed response.
+// clGuardWriter.Write additionally refuses to forward any bytes from a
+// call that would exceed the declared length (see its doc comment), so
+// those extra bytes never even reach gzhttp; this end-of-handler check
+// is the backstop that catches the mismatch regardless of how the
+// writer got there.
 //
 // HEAD requests are exempt: RFC 9110 requires the same Content-Length a
-// GET would carry, but a HEAD handler never writes a body, so "written <
-// want" is expected and not a truncation.
+// GET would carry, but a HEAD handler never writes a body, so "written !=
+// want" is expected and not a mismatch.
 func contentLengthGuard(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		g := &clGuardWriter{ResponseWriter: w, want: -1, ctx: r.Context()}
 		h.ServeHTTP(g, r)
-		if r.Method != http.MethodHead && g.want >= 0 && g.written < g.want {
+		if r.Method != http.MethodHead && g.want >= 0 && g.written != g.want {
 			// net/http logs nothing for ErrAbortHandler and the access log
 			// still says 200, so this line is the operator's only signal.
-			slog.ErrorContext(r.Context(), "response shorter than its Content-Length; aborting connection",
+			slog.ErrorContext(r.Context(), "response length differs from its Content-Length; aborting connection",
 				"method", r.Method, "path", r.URL.Path, "content_length", g.want, "written", g.written)
 			panic(http.ErrAbortHandler) // no terminating chunk -> client sees EOF, as without compression
 		}
@@ -241,9 +266,31 @@ func (w *clGuardWriter) WriteHeader(code int) {
 	w.ResponseWriter.WriteHeader(code)
 }
 
+// Write mirrors net/http's own response.write behaviour for an overlong
+// response (net/http/server.go): once a call would push the running
+// total past the declared Content-Length, NONE of that call's bytes are
+// forwarded to the underlying writer — not even the portion that would
+// still fit — and the call reports http.ErrContentLength instead. That
+// keeps the guarantee "no more bytes than declared ever reach the
+// client" true at the Write call itself, not just at the
+// end-of-handler check in contentLengthGuard, so an overlong write can
+// never be framed into a syntactically valid, longer response by gzhttp
+// sitting above this writer.
+//
+// w.written still tracks the full length the handler attempted to
+// write, not just what was actually forwarded: that is what lets
+// contentLengthGuard's end-of-handler check ("written != want") still
+// detect and abort an overlong response even though the excess bytes
+// were never forwarded here. Without that distinction, a handler whose
+// overlong call is entirely swallowed would leave written == want and
+// the mismatch that caused it would go unreported.
 func (w *clGuardWriter) Write(b []byte) (int, error) {
 	if !w.wroteHeader {
 		w.WriteHeader(http.StatusOK)
+	}
+	if w.want >= 0 && w.written+int64(len(b)) > w.want {
+		w.written += int64(len(b))
+		return 0, http.ErrContentLength
 	}
 	n, err := w.ResponseWriter.Write(b)
 	w.written += int64(n)

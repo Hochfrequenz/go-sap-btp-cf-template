@@ -2,6 +2,8 @@ package main
 
 import (
 	"bufio"
+	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -17,11 +19,12 @@ import (
 // wiring end to end; these tests are the narrower, faster complement.
 //
 // contentLengthGuard's contract: it panics with http.ErrAbortHandler
-// when a handler declares a Content-Length and then writes fewer bytes
-// than that before returning. net/http's own server recovers that panic
-// and aborts the connection without a clean terminator, so from an
-// httptest.Server's client the effect is a request error or a body read
-// error — never a successful read of a short body.
+// when a handler declares a Content-Length and then writes a different
+// number of bytes than that before returning — fewer (short) or more
+// (overlong). net/http's own server recovers that panic and aborts the
+// connection without a clean terminator, so from an httptest.Server's
+// client the effect is a request error or a body read error — never a
+// successful read of a short or overlong body.
 
 // doThroughGuard runs one request through contentLengthGuard(handler) via
 // a real httptest.Server (so net/http's panic recovery is exercised, not
@@ -199,6 +202,34 @@ func Test_contentLengthGuard_FlushSSE_Unaffected(t *testing.T) {
 	}
 }
 
+// Test_clGuardWriter_Write_NeverForwardsBytesPastDeclaredLength exercises
+// clGuardWriter.Write directly (no contentLengthGuard, no panic) to prove
+// the clamp itself: an overlong call must never forward any of its bytes
+// to the underlying writer, not just some of them. This is what stops
+// gzhttp — sitting below this writer in production — from ever seeing,
+// let alone framing, the excess bytes, independent of whether the
+// end-of-handler abort in contentLengthGuard also fires. Without this
+// clamp, a large enough overlong write could already be flushed onto the
+// wire by the time the handler returns and the guard panics, at which
+// point the panic can no longer take the leaked bytes back.
+func Test_clGuardWriter_Write_NeverForwardsBytesPastDeclaredLength(t *testing.T) {
+	rec := httptest.NewRecorder()
+	g := &clGuardWriter{ResponseWriter: rec, want: -1, ctx: context.Background()}
+	g.Header().Set("Content-Length", "100")
+	g.WriteHeader(http.StatusOK)
+
+	n, err := g.Write([]byte(strings.Repeat("z", 250)))
+	if !errors.Is(err, http.ErrContentLength) {
+		t.Fatalf("err = %v, want http.ErrContentLength", err)
+	}
+	if n != 0 {
+		t.Fatalf("n = %d, want 0 for a call that overflows on its own (matches net/http's response.write, which forwards none of an overflowing call)", n)
+	}
+	if got := rec.Body.Len(); got > 100 {
+		t.Fatalf("clGuardWriter forwarded %d bytes to the underlying writer, want at most the declared 100 — an overlong write must never reach whatever sits below (e.g. gzhttp), even partially", got)
+	}
+}
+
 // guardAborts runs h through contentLengthGuard alone and reports whether
 // the guard raised http.ErrAbortHandler. The httptest.Server-based tests
 // above cannot tell: without gzhttp in front, net/http enforces
@@ -233,6 +264,21 @@ func Test_contentLengthGuard_AbortDecision(t *testing.T) {
 		{"implicit 200, short", http.MethodGet, func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Length", "200")
 			_, _ = io.WriteString(w, strings.Repeat("y", 100))
+		}, true},
+		{"explicit 200, overlong", http.MethodGet, func(w http.ResponseWriter, _ *http.Request) {
+			// A handler that keeps writing past its own declared
+			// Content-Length must be caught too: gzhttp removes the
+			// Content-Length header once it starts compressing, so
+			// net/http's own overflow enforcement never sees this on
+			// the wire, and without this guard the extra bytes would
+			// reach the client as a clean, longer compressed response.
+			w.Header().Set("Content-Length", "100")
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w, strings.Repeat("y", 200))
+		}, true},
+		{"implicit 200, overlong", http.MethodGet, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Length", "100")
+			_, _ = io.WriteString(w, strings.Repeat("y", 200))
 		}, true},
 		{"short after 103", http.MethodGet, func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusEarlyHints)

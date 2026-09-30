@@ -185,6 +185,94 @@ func Test_newHTTPServer_TruncatedHandler_AbortsInsteadOfCleanEOF(t *testing.T) {
 	}
 }
 
+// Test_newHTTPServer_OverlongHandler_AbortsInsteadOfExtraBytes wires the
+// exact production Handler (compress(contentLengthGuard(r))) and proves
+// the other half of the truncation fix: a handler that announces a
+// Content-Length and then writes MORE bytes than that before returning.
+//
+// Before PR #143's review comment 4143000404, contentLengthGuard only
+// compared written < want, so this case slipped through silently: once
+// gzhttp starts compressing, it removes the Content-Length header from
+// what actually reaches the client, so net/http's own ErrContentLength
+// overflow enforcement (which only fires when that header is really on
+// the wire) never sees a mismatch, and the extra bytes would be framed
+// straight into a clean, fully-decodable, longer compressed response.
+func Test_newHTTPServer_OverlongHandler_AbortsInsteadOfExtraBytes(t *testing.T) {
+	const declared = 4096
+	overlong := []byte(strings.Repeat("x", declared+100))
+
+	newOverlongHandler := func() http.HandlerFunc {
+		return func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/plain")
+			w.Header().Set("Content-Length", strconv.Itoa(declared))
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(overlong)
+		}
+	}
+
+	t.Run("with Accept-Encoding gzip", func(t *testing.T) {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/overlong", newOverlongHandler())
+		srv := newHTTPServer("0", ginEngineWrapping(mux))
+		ts := startTestServer(t, srv)
+		client := noAutoDecompressHTTPClient(ts)
+
+		req, _ := http.NewRequest(http.MethodGet, ts.URL+"/overlong", nil)
+		req.Header.Set("Accept-Encoding", "gzip")
+		resp, err := client.Do(req)
+		if err != nil {
+			// The connection was aborted before headers/trailer
+			// completed — an acceptable failure shape too.
+			return
+		}
+		defer func() { _ = resp.Body.Close() }()
+		if body, err := io.ReadAll(resp.Body); err == nil {
+			t.Fatalf("expected a read/decode error for an overlong compressed response, got a clean %d-byte read", len(body))
+		}
+	})
+
+	// Without Accept-Encoding, gzhttp never starts compressing, so
+	// nothing about this guard should change what a plain net/http
+	// server running the exact same handler (no guard, no gzhttp) would
+	// do with an overlong write — that is net/http's own behaviour to
+	// own, not this guard's job to alter. Compare outcomes against a
+	// bare net/http server rather than asserting one specific shape, per
+	// the review comment's "don't assert more than you verify".
+	t.Run("without Accept-Encoding", func(t *testing.T) {
+		plainTS := httptest.NewServer(newOverlongHandler())
+		t.Cleanup(plainTS.Close)
+		plainResp, plainErr := plainTS.Client().Get(plainTS.URL)
+		var plainBody []byte
+		var plainReadErr error
+		if plainErr == nil {
+			defer func() { _ = plainResp.Body.Close() }()
+			plainBody, plainReadErr = io.ReadAll(plainResp.Body)
+		}
+
+		mux := http.NewServeMux()
+		mux.HandleFunc("/overlong", newOverlongHandler())
+		srv := newHTTPServer("0", ginEngineWrapping(mux))
+		ts := startTestServer(t, srv)
+		resp, err := noAutoDecompressHTTPClient(ts).Get(ts.URL + "/overlong")
+		var body []byte
+		var readErr error
+		if err == nil {
+			defer func() { _ = resp.Body.Close() }()
+			body, readErr = io.ReadAll(resp.Body)
+		}
+
+		plainFailed := plainErr != nil || plainReadErr != nil
+		gotFailed := err != nil || readErr != nil
+		if plainFailed != gotFailed {
+			t.Fatalf("outcome differs from plain net/http: plain failed=%v (err=%v, readErr=%v), production wiring failed=%v (err=%v, readErr=%v)",
+				plainFailed, plainErr, plainReadErr, gotFailed, err, readErr)
+		}
+		if !plainFailed && !bytes.Equal(plainBody, body) {
+			t.Fatalf("body differs from plain net/http: plain = %d bytes, production wiring = %d bytes", len(plainBody), len(body))
+		}
+	})
+}
+
 // Test_newHTTPServer_GinStreamAndHijack_Work pins the two gin features
 // that reach the writer below gin through UNCHECKED type assertions:
 // c.Stream (CloseNotify) and c.Writer.Hijack (websocket upgrades). Both
