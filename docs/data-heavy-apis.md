@@ -39,12 +39,14 @@ matter whether the caller buffers with `io.ReadAll` or streams with `io.Copy` /
   already sent when the cap trips. If a `Content-Length` was forwarded (SAP sent one and Go's
   transport didn't decompress the body), `contentLengthGuard` in `cmd/server/main.go` sees the short
   write and aborts the connection, so the client gets an unexpected EOF, with or without
-  compression. If there is none (SAP answered chunked, or gzipped so that Go's transport
-  decompressed it and `resp.ContentLength` is `-1`, which is what a typed handler gets whenever SAP
-  compresses), the response ends cleanly: a proper final chunk or a complete gzip/zstd stream, just
-  shorter. No HTTP-level check
-  can tell it apart from a complete response. Only the payload itself can (see "Payload shape").
-  The same happens if `DefaultOnPremiseTimeout` fires mid-body (see "Timeouts").
+  compression. If there is none, it depends on who decoded the body. `ginpingo.ProxyHandler`
+  relays SAP's `Content-Encoding` and the encoded bytes unchanged, so a cut there leaves an
+  incomplete gzip stream that the client's decoder rejects. A typed handler whose transport
+  decompressed SAP's gzip (so `resp.ContentLength` is `-1`), or any handler reading a chunked
+  uncompressed answer, ends cleanly instead: a proper final chunk, or a complete gzip/zstd stream
+  that our own compression wraps around the partial bytes, just shorter. No HTTP-level check can
+  tell that apart from a complete response. Only the payload itself can (see "Payload shape"). The
+  same happens if `DefaultOnPremiseTimeout` fires mid-body (see "Timeouts").
 
 **What the cap counts depends on who asked for compression.** A typed handler (all three examples)
 forwards no `Accept-Encoding`, so Go's transport requests gzip itself, decompresses transparently,
