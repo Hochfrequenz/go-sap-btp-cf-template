@@ -3,6 +3,7 @@ package main
 import (
 	"mime"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -10,11 +11,16 @@ import (
 	"github.com/hochfrequenz/btpingo/ginpingo"
 )
 
-// requireJSONBody rejects any /api request whose method is not GET, HEAD,
-// or OPTIONS unless its Content-Type is exactly "application/json" (a
-// charset parameter is allowed; anything else, including a MISSING
-// Content-Type, is rejected). GET/HEAD/OPTIONS never carry a body under
-// this template's routes, so they pass through untouched.
+// requireJSONBody rejects any /api request that carries a body unless its
+// Content-Type is "application/json" or a structured-syntax "application/*
+// +json" type (e.g. "application/merge-patch+json"); a parameter such as
+// "; charset=utf-8" is ignored, and both the type and its parameter names
+// are matched case-insensitively. POST always counts as carrying a body,
+// even with Content-Length 0 or unknown (-1, e.g. chunked), so every POST
+// must declare its format; PUT/PATCH/DELETE with no body (Content-Length
+// 0) pass through untouched. A missing or malformed Content-Type is
+// rejected. GET, HEAD, and OPTIONS are exempted by this middleware
+// outright, regardless of any body they carry.
 //
 // This complements — it does not replace — the approuter's own CSRF check
 // on /api/*: that check governs the session credentials a request carries,
@@ -37,12 +43,30 @@ func requireJSONBody() gin.HandlerFunc {
 			return
 		}
 
+		// No body to decode: Content-Length 0 (Go also reports 0 for a
+		// request with neither Content-Length nor Transfer-Encoding). A
+		// bodyless DELETE/PUT/PATCH passes; POST does not, so every POST
+		// declares its format. An unknown length (-1: chunked, or HTTP/2
+		// without Content-Length) counts as a body.
+		if c.Request.ContentLength == 0 && c.Request.Method != http.MethodPost {
+			c.Next()
+			return
+		}
+
 		mediaType, _, err := mime.ParseMediaType(c.Request.Header.Get("Content-Type"))
-		if err != nil || mediaType != "application/json" {
+		if err != nil || !isJSONMediaType(mediaType) {
 			ginpingo.AbortError(c, http.StatusUnsupportedMediaType, btpingo.CodeInvalidRequest,
 				"request body must be application/json", nil)
 			return
 		}
 		c.Next()
 	}
+}
+
+// isJSONMediaType reports whether mt (already lower-cased by
+// mime.ParseMediaType) is application/json or a structured-syntax
+// "+json" type such as application/merge-patch+json.
+func isJSONMediaType(mt string) bool {
+	return mt == "application/json" ||
+		(strings.HasPrefix(mt, "application/") && strings.HasSuffix(mt, "+json"))
 }

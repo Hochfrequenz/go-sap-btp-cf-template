@@ -59,16 +59,8 @@ const checkrunReqBody = `{"object_uri":"/sap/bc/adt/oo/classes/cl_abap_syntax"}`
 // the middleware in isolation, so a change to where it is installed in
 // buildRouter is also covered.
 //
-// Mutation-proof, see the two accompanying tests below:
-//   - Test_RequireJSONBody_RemovedFromChain_WouldFail documents that
-//     removing api.Use(requireJSONBody()) turns every "want 415" case
-//     here into a false pass (200/502/500 instead of 415) — i.e. this
-//     table alone would catch that regression.
-//   - the "no Content-Type" case specifically catches a version of the
-//     middleware that treats a missing header as acceptable instead of
-//     rejecting it: mime.ParseMediaType("") already returns an error, but
-//     a change to fall back to "assume JSON when absent" would flip that
-//     one case from 415 to 200 while leaving every other case green.
+// Mutation-proved: dropping requireJSONBody from buildRouter, or letting a
+// missing Content-Type through, fails this table.
 func Test_RequireJSONBody_Post(t *testing.T) {
 	cases := []struct {
 		name        string
@@ -106,21 +98,21 @@ func Test_RequireJSONBody_Post(t *testing.T) {
 	}
 }
 
-// Test_RequireJSONBody_SafeMethodsUnaffected asserts GET, HEAD, and
-// OPTIONS on the /api group are never blocked by requireJSONBody,
-// whatever Content-Type they carry (typically none) — they're read
-// requests, and huma's own GET-only routes (openapi.json, docs, schemas,
-// adt-discovery) rely on that being true.
+// Test_RequireJSONBody_SafeMethodsUnaffected asserts GET on the /api group
+// is never blocked by requireJSONBody, whatever Content-Type it carries
+// (typically none) — it's a read request, and huma's own GET-only routes
+// (openapi.json, docs, schemas, adt-discovery) rely on that being true.
+//
+// HEAD and OPTIONS are exempted the same way, but no route buildRouter
+// registers actually answers either method (gin 404s before any group
+// middleware runs), so they are covered on a bare engine instead, in
+// Test_RequireJSONBody_Methods (json_body_unit_test.go).
 func Test_RequireJSONBody_SafeMethodsUnaffected(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	r := buildRouter(claimsStubAuth, fakeRouteCaller{}, checkrunOKMutator{}, logger)
 
-	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodOptions} {
-		t.Run(method, func(t *testing.T) {
-			req := httptest.NewRequest(method, "/api/me", nil)
-			w := httptest.NewRecorder()
-			r.ServeHTTP(w, req)
-			then.AssertThat(t, w.Code, is.Not(is.EqualTo(http.StatusUnsupportedMediaType)))
-		})
-	}
+	req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	then.AssertThat(t, w.Code, is.Not(is.EqualTo(http.StatusUnsupportedMediaType)))
 }

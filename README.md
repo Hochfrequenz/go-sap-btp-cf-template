@@ -238,7 +238,7 @@ A handler is four mechanical steps:
 api.POST("/invoice-sync", invoiceSyncHandler(svc))
 ```
 
-Any non-`GET`/`HEAD`/`OPTIONS` route on `api` already goes through `requireJSONBody` (see [JSON-only writes](#json-only-writes)) — your write handler only ever sees an `application/json` body, nothing else to guard against at that layer.
+Writes on api already go through requireJSONBody (see [JSON-only writes](#json-only-writes)), so a write handler's body is declared as JSON; it still needs the binding/validation below.
 
 #### Steps 2–4: the handler.
 
@@ -286,6 +286,7 @@ func Handler(svc btpingo.OnPremCaller) gin.HandlerFunc {
 
 The template does **not** ship a transparent-proxy route by default - strict typing at the Gin boundary needs a fixed endpoint set, and the security story is much better when every path is explicit.
 If a fork genuinely wants a catch-all pass-through, `ginpingo.ProxyHandler(svc)` (taking `*btpingo.Service`) still exists; wire it yourself, gate it with `ginpingo.RequireScope("...User")`, and be deliberate about which users can reach it.
+On the api group, requireJSONBody rejects non-JSON writes; register such a route on a sibling group (see [JSON-only writes](#json-only-writes)).
 **For anything that writes state on the SAP side, read the next sub-section first** - validation-before-SAP is how you keep on-prem Short Dumps out of your life.
 
 Unit-test the handler with a one-method fake of `btpingo.OnPremCaller` / `btpingo.OnPremMutator` in its own `handler_test.go` (pattern: [`examples/invoicesync/handler_test.go`](examples/invoicesync/handler_test.go)); `btpingo`'s stubs of the XSUAA / Destination / CC stack live in its unexported `internal/testkit` and cannot be imported.
@@ -349,7 +350,7 @@ To genuinely lift the cap on one route, structure that route under its own route
 
 #### JSON-only writes
 
-`cmd/server/main.go`'s `requireJSONBody` middleware sits on the `api` group, after `authMW`: any request other than `GET`/`HEAD`/`OPTIONS` is rejected with a typed `415` unless its `Content-Type` is exactly `application/json` (a `charset` parameter is allowed) — a request with no `Content-Type` at all is rejected too. Every write handler this template ships already parses the body as JSON, so this makes that requirement explicit at the router boundary instead of leaving it to each handler's own binder. On the approuter side, `web/xs-app.json`'s `^/api/(.*)$` route keeps CSRF protection at its default (on), so writes to `/api/*` need a fetched `X-CSRF-Token` as well.
+`cmd/server/main.go`'s `requireJSONBody` middleware sits on the `api` group, after `authMW`. A `POST`, and any `PUT`/`PATCH`/`DELETE` that carries a body, is rejected with a typed `415` (`code: "invalid_request"`) unless its media type is `application/json` or `application/*+json`; parameters such as `charset` are ignored, and a missing `Content-Type` is rejected. `GET`/`HEAD`/`OPTIONS` and bodyless `PUT`/`PATCH`/`DELETE` pass through. A route that must accept another format (for example a fork's `ginpingo.ProxyHandler` forwarding XML) goes on a sibling group without the middleware: `raw := r.Group("/api", authMW)`. On the approuter side, `web/xs-app.json`'s `^/api/(.*)$` route leaves CSRF protection at its default (on): a browser session writing through the approuter first fetches a token with `GET /api/me` and `X-CSRF-Token: Fetch`, then sends it as `X-CSRF-Token`. Requests carrying `x-approuter-authorization`, and callers of the backend's own route, are not subject to that check.
 
 ---
 
