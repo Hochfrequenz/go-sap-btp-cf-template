@@ -30,6 +30,13 @@ applications:
     command: ./bin/server
     env:
       GIN_MODE: release
+      # ~80% of the 128M memory: quota below, in the Go runtime's own
+      # GOMEMLIMIT syntax (decimal bytes + B/KiB/MiB/GiB/TiB suffix — CF's
+      # "M" is NOT valid here). Leaves headroom for memory GOMEMLIMIT does
+      # not count (binary mappings, non-Go allocations) and other
+      # processes CF runs in the container. If you raise memory: for a
+      # data-heavy fork, raise GOMEMLIMIT with it — see README.
+      GOMEMLIMIT: 100MiB
     services:
       - go-xsuaa
       - go-dest

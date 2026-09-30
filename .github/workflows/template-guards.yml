@@ -5,7 +5,7 @@ name: Template guards
 # the tree leaves downstream users with a half-renamed repo on first
 # `go run ./cmd/apply-config`.
 #
-# Two guards:
+# Three guards:
 #   1. apply-config smoke — copy the repo, run apply-config against a
 #      fixture config.yml, then `go build ./... && go test ./...` in the
 #      rewritten tree. Breaks if any rewriter stops matching its target.
@@ -14,6 +14,9 @@ name: Template guards
 #      hard-coded reference that the rewriter doesn't know about fails
 #      CI, forcing the contributor to either extend the rewriter or
 #      opt-out of the gate explicitly.
+#   3. GOMEMLIMIT gate (runs in the magic-string job) — manifest.yml's
+#      backend app must set a Go-syntax GOMEMLIMIT that is not `off`,
+#      is at least 16MiB and is strictly below its memory: quota.
 
 on:
   push:
@@ -116,6 +119,100 @@ jobs:
 
       - name: Install ripgrep
         run: sudo apt-get update && sudo apt-get install -y ripgrep
+
+      - name: GOMEMLIMIT must be present, valid, and below the backend app's memory
+        run: |
+          set -euo pipefail
+          # Select the BACKEND app by name — both apps declare
+          # `memory: 128M`, so `name: ((backend-host))` is what
+          # distinguishes it from the `((backend-host))-web` approuter.
+          #
+          # Guard the selector itself first: if a fork renamed or
+          # duplicated the backend app, the yq queries below would
+          # silently return nothing (or the wrong app), so require
+          # exactly one match before reading GOMEMLIMIT off it.
+          matches=$(yq eval '[.applications[] | select(.name == "((backend-host))")] | length' manifest.yml)
+          if [ "$matches" != "1" ]; then
+            echo "::error::manifest.yml must contain exactly one app named '((backend-host))' (found $matches); update this gate's selector if your fork renamed it." >&2
+            exit 1
+          fi
+
+          gomemlimit=$(yq eval '.applications[] | select(.name == "((backend-host))") | .env.GOMEMLIMIT' manifest.yml)
+          memory=$(yq eval '.applications[] | select(.name == "((backend-host))") | .memory' manifest.yml)
+
+          if [ -z "$gomemlimit" ] || [ "$gomemlimit" = "null" ]; then
+            echo "::error::manifest.yml backend app (((backend-host))) is missing GOMEMLIMIT in its env: block." >&2
+            exit 1
+          fi
+
+          if [ "$gomemlimit" = "off" ]; then
+            echo "::error::GOMEMLIMIT='off' disables the soft memory limit entirely; the Go runtime never reacts to container memory pressure. Set it to a byte value below memory: ($memory)." >&2
+            exit 1
+          fi
+
+          # Go runtime GOMEMLIMIT format: decimal byte count with an
+          # optional B/KiB/MiB/GiB/TiB suffix (see `go doc runtime`).
+          # CF's own "M"/"MB"-style suffixes are NOT this format.
+          if ! [[ "$gomemlimit" =~ ^[0-9]+(B|KiB|MiB|GiB|TiB)?$ ]]; then
+            echo "::error::GOMEMLIMIT='$gomemlimit' is not a valid Go runtime GOMEMLIMIT value (decimal byte count with optional B/KiB/MiB/GiB/TiB suffix). A CF-style value like '100M' or '100MB' makes the Go runtime throw 'malformed GOMEMLIMIT' and the app crash-loops on deploy. See \`go doc runtime\`." >&2
+            exit 1
+          fi
+
+          to_bytes() {
+            local val="$1"
+            [[ "$val" =~ ^([0-9]+)(B|KiB|MiB|GiB|TiB)?$ ]] || return 1
+            local raw="${BASH_REMATCH[1]}" unit="${BASH_REMATCH[2]}" mult
+            # Strip leading zeros, then parse base 10: bash reads a
+            # leading-zero numeral (e.g. "08") as octal and aborts on 8/9.
+            local digits="${raw#"${raw%%[!0]*}"}"
+            # Go rejects anything that overflows int64 ("malformed
+            # GOMEMLIMIT"); bash would silently wrap it, so refuse here.
+            [ "${#digits}" -le 18 ] || return 1
+            local num=$((10#${digits:-0}))
+            case "$unit" in
+              ""|B) mult=1 ;;
+              KiB) mult=$((1024)) ;;
+              MiB) mult=$((1024 ** 2)) ;;
+              GiB) mult=$((1024 ** 3)) ;;
+              TiB) mult=$((1024 ** 4)) ;;
+            esac
+            (( num <= 9223372036854775807 / mult )) || return 1
+            echo $((num * mult))
+          }
+
+          if ! gomemlimit_bytes=$(to_bytes "$gomemlimit"); then
+            echo "::error::GOMEMLIMIT='$gomemlimit' is too large (19+ significant digits or overflows int64); the Go runtime rejects overflowing values as 'malformed GOMEMLIMIT'." >&2
+            exit 1
+          fi
+
+          sixteen_mib=$((16 * 1024 * 1024))
+          if [ "$gomemlimit_bytes" -lt "$sixteen_mib" ]; then
+            echo "::error::GOMEMLIMIT='$gomemlimit' ($gomemlimit_bytes bytes) is below 16MiB, which is too tight to be an intentional limit." >&2
+            exit 1
+          fi
+
+          # CF manifest memory units: accept every unit CF's own docs
+          # allow — M/G (and lowercase m/g), each with an optional
+          # trailing "B"/"b" (MB, GB, mb, gb, ...). CF treats all of
+          # these as MiB/GiB, never decimal MB/GB.
+          if ! [[ "$memory" =~ ^([0-9]+)([MmGg])[Bb]?$ ]]; then
+            echo "::error::manifest.yml backend app memory='$memory' is not in the expected CF format (a number followed by M/MB or G/GB, any case)." >&2
+            exit 1
+          fi
+          # Base 10: same leading-zero-as-octal pitfall as GOMEMLIMIT above.
+          mem_num=$((10#${BASH_REMATCH[1]}))
+          mem_unit="${BASH_REMATCH[2]}"
+          case "$mem_unit" in
+            [Mm]) memory_bytes=$((mem_num * 1024 * 1024)) ;;
+            [Gg]) memory_bytes=$((mem_num * 1024 * 1024 * 1024)) ;;
+          esac
+
+          if [ "$gomemlimit_bytes" -ge "$memory_bytes" ]; then
+            echo "::error::GOMEMLIMIT='$gomemlimit' ($gomemlimit_bytes bytes) is not below manifest.yml's memory: $memory ($memory_bytes bytes). Lower GOMEMLIMIT, or raise memory: too and keep it in step (roughly the same ~80% ratio, see README)." >&2
+            exit 1
+          fi
+
+          echo "OK: GOMEMLIMIT=$gomemlimit ($gomemlimit_bytes bytes) is valid and below memory: $memory ($memory_bytes bytes)."
 
       - name: Module path must only appear in rewriter-known files
         run: |
