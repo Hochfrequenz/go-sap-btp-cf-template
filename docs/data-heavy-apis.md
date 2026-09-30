@@ -83,12 +83,13 @@ The difference is a size-driven choice, and each pattern has a real limit:
 
 **Memory math.** `manifest.yml`'s backend app defaults to `memory: 128M` with
 `GOMEMLIMIT: 100MiB` — see [the "Body-size cap" section](../README.md#body-size-cap) for why the two
-are tied together and must be raised as a pair. Budget about **3× the payload per in-flight buffered
+are tied together and must be raised as a pair. Budget about **3.5× the payload per in-flight buffered
 request**, not 1×: the raw bytes, the decoded structs, and for a reshaping handler the re-encoded
 output. Measured with go1.27: a 20 MB JSON time-series array reached 47–64 MiB of peak heap for
 `ReadAll` + `Unmarshal` (+ `Marshal`). That is more than half of the default `GOMEMLIMIT` for one
 request, so at the defaults a second concurrent one pushes the process into GC thrashing or an OOM
-kill. Size `memory:`/`GOMEMLIMIT` for `(max concurrent requests on the route) × 3 × (raised limit)`.
+kill (64 MiB for 20 MB is about 3.4×). Size `GOMEMLIMIT` for the process's idle heap plus
+`(max concurrent requests on the route) × 3.5 × (raised limit)`, and keep `memory:` about 25% above it.
 Streaming keeps a single request's incremental memory use close to `io.Copy`'s buffer size (32 KiB
 per copy by default, plus the per-response compressor state; gzhttp's zstd encoder uses a 128 KiB
 window) regardless of the total response size, which is what makes it the correct choice once
