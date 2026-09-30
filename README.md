@@ -100,6 +100,9 @@ turn it off — but nothing about the backend requires it, and a fork is free to
    delete `Test_transformPackageJson_RewritesTopLevelNameOnly` in `rewriters_test.go`.
 5. Skip §5a; leave `xs-security.json`'s `redirect-uris` as `[]` (a template-guards check requires
    it).
+6. Already deployed with the approuter? Also remove it from the space: `cf delete <approuter-app> -r`
+   (`-r` deletes its route), and clear the redirect URI that §5a registered in XSUAA by pushing the
+   unchanged file: `cf update-service go-xsuaa -c xs-security.json`.
 
 **Not an isolation boundary as shipped.** The backend app has its own public `cfapps` route (no
 `routes:`/`no-route`/`apps.internal` restriction in `manifest.yml`), and the approuter reaches it
