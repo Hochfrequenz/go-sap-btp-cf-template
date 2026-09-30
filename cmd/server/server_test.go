@@ -16,13 +16,13 @@ import (
 )
 
 // server_test.go exercises newHTTPServer itself — the production wiring
-// main() installs — rather than compress() or contentLengthGuard() in
-// isolation (those have their own unit tests in gzip_test.go and clguard_test.go).
-// Before newHTTPServer existed, nothing ran a request through the
-// *http.Server main() actually builds: gzip_test.go's httptest servers
-// called compress(...) directly, so a mutation to main's
-// Handler: compress(r) wiring itself, or to any of its four timeout
-// values, was invisible to the test suite. See PR #143 review.
+// main() installs — rather than btpingo.CompressHandler (and the
+// contentLengthGuard it wraps) in isolation, which has its own unit
+// tests in the btpingo module. Before newHTTPServer existed, nothing ran
+// a request through the *http.Server main() actually builds, so a
+// mutation to main's Handler: btpingo.CompressHandler(r) wiring itself,
+// or to any of its four timeout values, was invisible to the test
+// suite. See PR #143 review.
 //
 // startTestServer wires an httptest.Server around the given *http.Server
 // (as newHTTPServer returns it) rather than letting httptest build its
@@ -60,10 +60,9 @@ func noAutoDecompressHTTPClient(ts *httptest.Server) *http.Client {
 }
 
 // Test_newHTTPServer_CompressesLargeResponses proves the real production
-// Handler (compress(contentLengthGuard(r)), as newHTTPServer wires it)
-// still gzip-compresses a large response end to end, not just that
-// compress() does when called directly against a hand-built
-// httptest.Server as gzip_test.go's tests do.
+// Handler (btpingo.CompressHandler(r), as newHTTPServer wires it) still
+// gzip-compresses a large response end to end, not just that
+// btpingo.CompressHandler does in its own package-level tests.
 func Test_newHTTPServer_CompressesLargeResponses(t *testing.T) {
 	big := []byte(strings.Repeat("a-fairly-long-value-for-compression-", 200))
 	mux := http.NewServeMux()
@@ -137,7 +136,7 @@ func Test_newHTTPServer_PinnedTimeouts(t *testing.T) {
 }
 
 // Test_newHTTPServer_TruncatedHandler_AbortsInsteadOfCleanEOF wires the
-// exact production Handler (compress(contentLengthGuard(r))) and proves
+// exact production Handler (btpingo.CompressHandler(r)) and proves
 // the two compose the way the truncation fix intends: a handler that
 // announces Content-Length N but writes fewer bytes before returning
 // must NOT reach the client as a clean, fully-decodable compressed
@@ -186,7 +185,7 @@ func Test_newHTTPServer_TruncatedHandler_AbortsInsteadOfCleanEOF(t *testing.T) {
 }
 
 // Test_newHTTPServer_OverlongHandler_AbortsInsteadOfExtraBytes wires the
-// exact production Handler (compress(contentLengthGuard(r))) and proves
+// exact production Handler (btpingo.CompressHandler(r)) and proves
 // the other half of the truncation fix: a handler that announces a
 // Content-Length and then writes MORE bytes than that before returning.
 //
@@ -335,5 +334,51 @@ func Test_newHTTPServer_GinStreamAndHijack_Work(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// Test_newHTTPServer_UnknownRoute_404Body is the regression test for the
+// bug that killed the earlier gin-level ginpingo.Gzip() approach: a
+// response for a route Gin doesn't recognise must still carry gin's real
+// 404 body, not an empty one, through the exact production Handler
+// (btpingo.CompressHandler(r), as newHTTPServer wires it). Gin's default
+// 404 body ("404 page not found") is well below gzhttp's 1 KiB MinSize,
+// so even with Accept-Encoding: gzip this particular response is left
+// uncompressed — the branch below handles both cases regardless.
+func Test_newHTTPServer_UnknownRoute_404Body(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	r := buildRouter(func(c *gin.Context) { c.Next() }, fakeRouteCaller{}, fakeRouteMutator{}, logger)
+	ts := startTestServer(t, newHTTPServer("0", r))
+	client := noAutoDecompressHTTPClient(ts)
+
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/this-route-does-not-exist", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("do request: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	body := raw
+	if resp.Header.Get("Content-Encoding") == "gzip" {
+		zr, err := gzip.NewReader(bytes.NewReader(raw))
+		if err != nil {
+			t.Fatalf("gzip.NewReader: %v", err)
+		}
+		body, err = io.ReadAll(zr)
+		if err != nil {
+			t.Fatalf("gzip read: %v", err)
+		}
+	}
+	if len(body) == 0 {
+		t.Fatalf("404 body is empty; want gin's real not-found body")
 	}
 }
