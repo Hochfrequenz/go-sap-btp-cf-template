@@ -606,6 +606,7 @@ buildpacks:
   - go_buildpack
 env:
   GIN_MODE: release
+  GOMEMLIMIT: 100MiB
   GO_INSTALL_PACKAGE_SPEC: ./cmd/server
 ```
 
@@ -615,6 +616,7 @@ buildpacks:
   - paketo-buildpacks/go
 env:
   GIN_MODE: release
+  GOMEMLIMIT: 100MiB
   BP_GO_TARGETS: ./cmd/server
 ```
 

@@ -13,9 +13,10 @@ name: Template guards
 #      and `./cmd/server` outside their allow-listed homes. A new
 #      hard-coded reference that the rewriter doesn't know about fails
 #      CI, forcing the contributor to either extend the rewriter or
-#      opt-out of the gate explicitly. Also gates GOMEMLIMIT against
-#      manifest.yml's memory: quota (see its step below), so a fork that
-#      raises memory: without raising GOMEMLIMIT in lockstep fails here.
+#      opt-out of the gate explicitly.
+#   3. GOMEMLIMIT gate (runs in the magic-string job) — manifest.yml's
+#      backend app must set a Go-syntax GOMEMLIMIT that is not `off`,
+#      is at least 16MiB and is strictly below its memory: quota.
 
 on:
   push:
@@ -125,6 +126,17 @@ jobs:
           # Select the BACKEND app by name — both apps declare
           # `memory: 128M`, so `name: ((backend-host))` is what
           # distinguishes it from the `((backend-host))-web` approuter.
+          #
+          # Guard the selector itself first: if a fork renamed or
+          # duplicated the backend app, the yq queries below would
+          # silently return nothing (or the wrong app), so require
+          # exactly one match before reading GOMEMLIMIT off it.
+          matches=$(yq eval '[.applications[] | select(.name == "((backend-host))")] | length' manifest.yml)
+          if [ "$matches" != "1" ]; then
+            echo "::error::manifest.yml must contain exactly one app named '((backend-host))' (found $matches); update this gate's selector if your fork renamed it." >&2
+            exit 1
+          fi
+
           gomemlimit=$(yq eval '.applications[] | select(.name == "((backend-host))") | .env.GOMEMLIMIT' manifest.yml)
           memory=$(yq eval '.applications[] | select(.name == "((backend-host))") | .memory' manifest.yml)
 
@@ -149,7 +161,11 @@ jobs:
           to_bytes() {
             local val="$1"
             if [[ "$val" =~ ^([0-9]+)(B|KiB|MiB|GiB|TiB)?$ ]]; then
-              local num="${BASH_REMATCH[1]}"
+              # Base 10: bash treats a leading-zero numeral (e.g. "08") as
+              # octal in arithmetic contexts, and "08"/"09" aren't even
+              # valid octal digits, so `$((num * ...))` below would abort
+              # the step instead of just failing the size check.
+              local num=$((10#${BASH_REMATCH[1]}))
               local unit="${BASH_REMATCH[2]}"
               case "$unit" in
                 ""|B) echo "$num" ;;
@@ -169,16 +185,20 @@ jobs:
             exit 1
           fi
 
-          # CF manifest memory units: M = MiB, G = GiB.
-          if ! [[ "$memory" =~ ^([0-9]+)(M|G)$ ]]; then
-            echo "::error::manifest.yml backend app memory='$memory' is not in the expected CF format (a number followed by M or G)." >&2
+          # CF manifest memory units: accept every unit CF's own docs
+          # allow — M/G (and lowercase m/g), each with an optional
+          # trailing "B"/"b" (MB, GB, mb, gb, ...). CF treats all of
+          # these as MiB/GiB, never decimal MB/GB.
+          if ! [[ "$memory" =~ ^([0-9]+)([MmGg])[Bb]?$ ]]; then
+            echo "::error::manifest.yml backend app memory='$memory' is not in the expected CF format (a number followed by M/MB or G/GB, any case)." >&2
             exit 1
           fi
-          mem_num="${BASH_REMATCH[1]}"
+          # Base 10: same leading-zero-as-octal pitfall as GOMEMLIMIT above.
+          mem_num=$((10#${BASH_REMATCH[1]}))
           mem_unit="${BASH_REMATCH[2]}"
           case "$mem_unit" in
-            M) memory_bytes=$((mem_num * 1024 * 1024)) ;;
-            G) memory_bytes=$((mem_num * 1024 * 1024 * 1024)) ;;
+            [Mm]) memory_bytes=$((mem_num * 1024 * 1024)) ;;
+            [Gg]) memory_bytes=$((mem_num * 1024 * 1024 * 1024)) ;;
           esac
 
           if [ "$gomemlimit_bytes" -ge "$memory_bytes" ]; then
