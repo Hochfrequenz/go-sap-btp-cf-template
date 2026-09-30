@@ -57,11 +57,13 @@ applications:
     buildpacks:
       - nodejs_buildpack
     env:
+      # timeout (ms): approuter's default is a 30s inactivity timeout on this destination, too short for the on-prem calls behind it; 900000 matches the Go backend's WriteTimeout.
       destinations: >
         [
           { "name": "GoBackend",
             "url":  "https://((backend-host)).((domain))",
-            "forwardAuthToken": true }
+            "forwardAuthToken": true,
+            "timeout": 900000 }
         ]
     services:
       - go-xsuaa
