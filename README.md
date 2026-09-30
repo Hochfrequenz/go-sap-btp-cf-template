@@ -1015,7 +1015,7 @@ For Principal Propagation specifically: the approuter-forwarded user JWT is stas
 ### Timeouts — four layers, three of them ours
 
 A request that fans out to a legacy on-prem SAP system can sit on the wire for minutes.
-Four different timeouts gate it; three are set by this template, the fourth is deployment-managed. The approuter layer applies only to browser traffic; machine clients calling the backend directly skip it.
+Four different timeouts gate it; three are set by this template, the fourth is deployment-managed. The approuter layer applies only to requests that go through the approuter; clients calling the backend's own route skip it.
 
 **Approuter destination (`manifest.yml`):**
 
@@ -1039,8 +1039,10 @@ Four different timeouts gate it; three are set by this template, the fourth is d
 | `DefaultOnPremiseTimeout` | 600 s   | Per-call timeout on `*btpingo.Service`'s on-prem `*http.Client`. ADT-through-CC calls regularly take minutes; observed worst case ~5 minutes. 10 minutes is the per-call ceiling. Override per-instance with `btpingo.WithOnPremiseTimeout(...)` when the fork's SAP is reliably faster. |
 
 The two values are intentionally **asymmetric**: `WriteTimeout` (one budget for the whole handler) sits 5 min above `DefaultOnPremiseTimeout` (one budget per on-prem call).
-On a CSRF mutating route — `HEAD/GET` for the token, then `POST` — each leg gets its own 10-min on-prem budget. The 15-min `WriteTimeout` leaves 5 minutes of headroom over one full-budget leg, so a single hung call still surfaces as `upstream_unreachable`; if both legs hang, `WriteTimeout` fires first and the request fails without the envelope.
-Result: a hung SAP always surfaces as a clean `upstream_unreachable` envelope from the on-prem layer, never as a server-side write timeout.
+On a CSRF mutating route — a `GET` with `X-CSRF-Token: Fetch` (only when no token is cached), then the `POST` — each on-prem call gets its own 10-min budget, while the 15-min `WriteTimeout` is one budget for the whole handler.
+A call that hangs outright still surfaces as `upstream_unreachable`: a hung token fetch times out at 10 min and the `POST` never runs; a hung `POST` after a cached or quick fetch times out well inside the 15 min.
+Only if the earlier calls in the request have already used more than 5 minutes (a slow fetch that succeeds, or a re-fetch after SAP's `403` with `X-CSRF-Token: Required`) and the last call then hangs does `WriteTimeout` expire first: Go can no longer write the envelope, so the approuter answers its own `504` at 900 s, and a direct caller gets the Gorouter's timeout or a connection closed without a response.
+Result: a hung SAP surfaces as a clean `upstream_unreachable` envelope from the on-prem layer, except in that slow-call-then-hang case.
 
 **CF Gorouter (deployment-managed):** The CF route layer has its own per-request timeout (typically ~900 s, varies by foundation/landscape).
 It bounds _all three_ of the above — the 900 s `WriteTimeout` (and the approuter's matching `timeout`) is intentionally aligned with that ceiling. If a fork legitimately needs longer than the route allows, raising the values here is moot — the platform owner has to extend the route timeout.
