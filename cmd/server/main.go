@@ -5,15 +5,18 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -21,6 +24,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humagin"
 	"github.com/gin-gonic/gin"
+	"github.com/klauspost/compress/gzhttp"
 
 	"github.com/hochfrequenz/btpingo"
 	"github.com/hochfrequenz/btpingo/ginpingo"
@@ -60,58 +64,7 @@ func main() {
 	if port == "" {
 		port = "8080"
 	}
-	// The four timeouts cover four distinct slow-client failure modes;
-	// any one missing leaves a goroutine leak vector against a backend
-	// that is directly internet-reachable on its .cfapps.* route (not
-	// only behind the approuter):
-	//
-	//   - ReadHeaderTimeout (10s):  Slowloris on request headers.
-	//   - ReadTimeout       (60s):  Slow-body POSTs (client → server).
-	//   - WriteTimeout     (900s):  Bounds total handler runtime, since
-	//                               Go starts WriteTimeout at header-read,
-	//                               not at first write.
-	//   - IdleTimeout      (120s):  Keep-alive sockets parked indefinitely.
-	//
-	// WriteTimeout is sized for an on-prem SAP system that is usually
-	// slow under load. An ADT call routed through the Cloud Connector +
-	// CSRF handshake regularly takes minutes, and observed worst case is
-	// ~5 minutes per leg.
-	//
-	// 900s (15 minutes) is intentionally HIGHER than the 10-minute
-	// btpingo.DefaultOnPremiseTimeout. WriteTimeout is one budget covering
-	// the *whole* handler run (CSRF handshake leg + main on-prem POST +
-	// response write); the on-prem client timeout is a budget per call.
-	// Setting WriteTimeout = on-prem-timeout would let WriteTimeout race
-	// the on-prem timeout under CSRF — sometimes producing a clean
-	// upstream-unreachable envelope, sometimes a server-side timeout.
-	// 900s gives 5 minutes of headroom over a single full-budget on-prem
-	// call so the on-prem timeout reliably fires first and the client
-	// sees one stable failure mode. The 900s also lines up with most CF
-	// Gorouter request-timeout defaults, so values above this are moot
-	// without platform-side changes.
-	//
-	// WriteTimeout is the only inner cap; if it's reached, that means
-	// the handler genuinely stalled or made multiple consecutive
-	// long-running on-prem calls — both pathological enough that
-	// timing out is the right answer.
-	//
-	// ReadTimeout stays at 60s because it bounds *client → server* body
-	// transfer; the request bodies the template ships are small JSON, and
-	// 60s on a slow body upload is already deep into Slowloris territory.
-	//
-	// A handler that legitimately needs an even longer write window
-	// (large-file streaming, long-poll) should override per-request via
-	// http.NewResponseController(w).SetWriteDeadline(...) rather than
-	// raising this default — looser global timeouts re-open the
-	// slow-client surface for every other route.
-	srv := &http.Server{
-		Addr:              ":" + port,
-		Handler:           r,
-		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       60 * time.Second,
-		WriteTimeout:      900 * time.Second,
-		IdleTimeout:       120 * time.Second,
-	}
+	srv := newHTTPServer(port, r)
 
 	// Runtime server failures land on serverErr; signal shutdowns land
 	// on ctx.Done(). Select over both so we have ONE exit path with one
@@ -168,6 +121,266 @@ func logLevelFromEnv() slog.Level {
 			"LOG_LEVEL=%q ignored; use debug|info|error. See README §Logging.\n",
 			raw)
 		return slog.LevelInfo
+	}
+}
+
+// compress wraps the given handler with gzhttp's response compression at
+// the net/http level — OUTSIDE the Gin engine, not as a Gin middleware.
+//
+// A prior design (github.com/hochfrequenz/btpingo#7's proposed
+// ginpingo.Gzip()) wrapped gin.ResponseWriter directly and was abandoned
+// (btpingo#8) after review found late writes, per-write flushing, and
+// wrong behaviour on 206/already-sent-header responses — Gin's writer
+// makes those hard to get right from inside the framework. Wrapping the
+// whole http.Handler that http.Server dispatches to sidesteps all of
+// that: gzhttp sees a plain http.ResponseWriter and Gin never knows
+// compression happened.
+//
+// This is why buildRouter itself is untouched: it keeps returning
+// *gin.Engine (see Test_RouterAllowList), and only newHTTPServer's
+// http.Server.Handler assignment changes. Tests exercise this exact
+// wrapper (not a hand-rolled substitute) via httptest.Server so the
+// tested wiring matches production.
+//
+// gzhttp defaults are kept, INCLUDING its zstd support (not gzip-only):
+//   - Negotiation is per-request via Accept-Encoding, so a client that
+//     never advertises "zstd" (curl, older browsers, most non-browser
+//     BTP-internal callers) simply gets gzip; nothing about restricting
+//     to gzip-only would change what such a client receives.
+//   - The approuter (@sap/approuter 23.0.0, checked in its source)
+//     forwards the browser's Accept-Encoding to this backend unchanged,
+//     copies our Content-Encoding header, and streams the body. Its own
+//     compression@1.8.1 middleware skips responses that already carry
+//     Content-Encoding, so zstd or gzip from here reaches the browser
+//     as-is.
+//   - Restricting to gzip only would remove real bandwidth savings for
+//     zstd-capable clients for no compatibility benefit this template
+//     can identify, so the default (gzip + zstd, chosen per request)
+//     is kept as-is.
+//
+// gzhttp also keeps its own minimum-size threshold and content-type
+// skip list, so /healthz's tiny "ok" body and huma's already-compact
+// responses under that threshold are left alone, and non-compressible
+// content types (already-compressed upstream bodies included, since
+// those already set Content-Encoding) are passed through untouched
+// rather than double-compressed.
+func compress(h http.Handler) http.Handler {
+	return gzhttp.GzipHandler(h)
+}
+
+// contentLengthGuard sits BETWEEN gzhttp and the wrapped handler
+// (Handler: compress(contentLengthGuard(r))) and closes a Content-Length
+// mismatch gap gzhttp does not cover on its own, in either direction:
+//
+//   - Short: a handler announces a Content-Length and then writes fewer
+//     bytes than that before returning — e.g. a proxied on-prem response
+//     whose connection drops mid-io.Copy. gzhttp still frames a
+//     syntactically complete gzip/zstd stream around whatever partial
+//     bytes it saw and closes it cleanly. The client then sees a valid,
+//     fully-decodable 200 response that is silently short.
+//   - Overlong: a handler keeps writing past its own declared
+//     Content-Length. net/http's own ErrContentLength enforcement only
+//     fires when a Content-Length header is actually on the wire to the
+//     client, but gzhttp removes that header the moment it starts
+//     compressing — so with compression active, the extra bytes are
+//     framed straight into the compressed stream and reach the client as
+//     a clean response containing more than the handler declared.
+//
+// Both are the exact failure mode compression must not introduce: an
+// uncompressed response in the same situation reaches the client as a
+// broken connection (unexpected EOF), not a clean 200.
+//
+// The guard tracks the announced Content-Length and the bytes actually
+// written; if the handler returns having written a different number of
+// bytes than it declared — fewer (a dropped on-prem connection) OR more
+// (a handler that keeps writing past its own declared length) — it
+// panics with http.ErrAbortHandler. net/http's server recovers that
+// panic itself, logs nothing (by design — it is the documented
+// "silently abort" signal), and closes the connection without writing a
+// final chunk/frame terminator. That reproduces the same client-visible
+// unexpected-EOF failure an uncompressed response of the same shape
+// would have produced, instead of a clean-looking short OR overlong
+// body.
+//
+// clGuardWriter.Write also refuses to forward any bytes from a call that
+// would exceed the declared length, so the extra bytes never reach
+// gzhttp; this end-of-handler check is the backstop for both directions.
+//
+// HEAD requests are exempt: RFC 9110 requires the same Content-Length a
+// GET would carry, but a HEAD handler never writes a body, so "written !=
+// want" is expected and not a mismatch.
+func contentLengthGuard(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		g := &clGuardWriter{ResponseWriter: w, want: -1, ctx: r.Context()}
+		h.ServeHTTP(g, r)
+		if r.Method != http.MethodHead && g.want >= 0 && g.written != g.want {
+			// net/http logs nothing for ErrAbortHandler and the access log
+			// still says 200, so this line is the operator's only signal.
+			slog.ErrorContext(r.Context(), "response length differs from its Content-Length; aborting connection",
+				"method", r.Method, "path", r.URL.Path, "content_length", g.want, "written", g.written)
+			panic(http.ErrAbortHandler) // no terminating chunk -> client sees EOF, as without compression
+		}
+	})
+}
+
+// clGuardWriter wraps http.ResponseWriter to observe the Content-Length
+// the handler declares (if any) and the number of body bytes it actually
+// writes. It implements http.Flusher and Unwrap (for
+// http.ResponseController, e.g. per-request SetWriteDeadline) so it is
+// transparent to callers that type-assert those interfaces on the
+// original writer.
+type clGuardWriter struct {
+	http.ResponseWriter
+	want, written int64
+	wroteHeader   bool
+	ctx           context.Context
+}
+
+// WriteHeader latches only on the FIRST call that actually finalizes the
+// header. Per RFC 9110 §15.2, 1xx informational status codes (e.g. 103
+// Early Hints) are not the final response status — a handler may call
+// WriteHeader(103) and then still call WriteHeader(200) later. Latching
+// on a 1xx would freeze "want" (or wroteHeader) before the real
+// Content-Length is known, so 1xx codes are explicitly skipped here and
+// do not set wroteHeader.
+func (w *clGuardWriter) WriteHeader(code int) {
+	if code >= 100 && code < 200 {
+		w.ResponseWriter.WriteHeader(code)
+		return
+	}
+	if !w.wroteHeader {
+		w.wroteHeader = true
+		bodyAllowed := code >= 200 && code != http.StatusNoContent && code != http.StatusNotModified
+		if cl, err := strconv.ParseInt(w.Header().Get("Content-Length"), 10, 64); err == nil && bodyAllowed {
+			w.want = cl
+		}
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+
+// Write mirrors net/http's own response.write behaviour for an overlong
+// response (net/http/server.go): once a call would push the running
+// total past the declared Content-Length, NONE of that call's bytes are
+// forwarded to the underlying writer — not even the portion that would
+// still fit — and the call reports http.ErrContentLength instead. That
+// keeps the guarantee "no more bytes than declared ever reach the
+// client" true at the Write call itself, not just at the
+// end-of-handler check in contentLengthGuard, so an overlong write can
+// never be framed into a syntactically valid, longer response by gzhttp
+// sitting above this writer.
+//
+// w.written still tracks the full length the handler attempted to
+// write, not just what was actually forwarded: that is what lets
+// contentLengthGuard's end-of-handler check ("written != want") still
+// detect and abort an overlong response even though the excess bytes
+// were never forwarded here. Without that distinction, a handler whose
+// overlong call is entirely swallowed would leave written == want and
+// the mismatch that caused it would go unreported.
+func (w *clGuardWriter) Write(b []byte) (int, error) {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
+	if w.want >= 0 && w.written+int64(len(b)) > w.want {
+		w.written += int64(len(b))
+		return 0, http.ErrContentLength
+	}
+	n, err := w.ResponseWriter.Write(b)
+	w.written += int64(n)
+	return n, err
+}
+
+func (w *clGuardWriter) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+func (w *clGuardWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+// Hijack and CloseNotify exist because gin calls both through UNCHECKED
+// type assertions on the writer it wraps (gin v1.12.0 response_writer.go):
+// without them c.Writer.Hijack() (websocket upgrades) and c.Stream()
+// (which calls CloseNotify) panic with "interface conversion".
+func (w *clGuardWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return http.NewResponseController(w.ResponseWriter).Hijack()
+}
+
+// CloseNotify is derived from the request context rather than delegated:
+// gzhttp's pass-through writer (used when the client sent no
+// Accept-Encoding) does not implement http.CloseNotifier either. The
+// context is cancelled on client disconnect and when ServeHTTP returns,
+// so the goroutine cannot outlive the request.
+func (w *clGuardWriter) CloseNotify() <-chan bool {
+	ch := make(chan bool, 1)
+	go func() {
+		<-w.ctx.Done()
+		ch <- true
+	}()
+	return ch
+}
+
+// newHTTPServer builds the *http.Server production wiring: the given
+// *gin.Engine wrapped with response compression (compress) and the
+// truncation guard (contentLengthGuard) that sits between compression
+// and the handler, plus the four slow-client timeouts below. It is a
+// function (not inlined in main) so cmd/server/server_test.go can
+// exercise the exact production wiring — compression, the guard, and
+// the timeout values — through one real *http.Server via httptest,
+// rather than only through the individual compress()/contentLengthGuard
+// unit tests.
+//
+// The four timeouts cover four distinct slow-client failure modes; any
+// one missing leaves a goroutine leak vector against a backend that is
+// directly internet-reachable on its .cfapps.* route (not only behind
+// the approuter):
+//
+//   - ReadHeaderTimeout (10s):  Slowloris on request headers.
+//   - ReadTimeout       (60s):  Slow-body POSTs (client → server).
+//   - WriteTimeout     (900s):  Bounds total handler runtime, since
+//     Go starts WriteTimeout at header-read,
+//     not at first write.
+//   - IdleTimeout      (120s):  Keep-alive sockets parked indefinitely.
+//
+// WriteTimeout is sized for an on-prem SAP system that is usually
+// slow under load. An ADT call routed through the Cloud Connector +
+// CSRF handshake regularly takes minutes, and observed worst case is
+// ~5 minutes per leg.
+//
+// 900s (15 minutes) is intentionally HIGHER than the 10-minute
+// btpingo.DefaultOnPremiseTimeout. WriteTimeout is one budget covering
+// the *whole* handler run (CSRF handshake leg + main on-prem POST +
+// response write); the on-prem client timeout is a budget per call.
+// Setting WriteTimeout = on-prem-timeout would let WriteTimeout race
+// the on-prem timeout under CSRF — sometimes producing a clean
+// upstream-unreachable envelope, sometimes a server-side timeout.
+// 900s gives 5 minutes of headroom over a single full-budget on-prem
+// call so the on-prem timeout reliably fires first and the client
+// sees one stable failure mode. The 900s also lines up with most CF
+// Gorouter request-timeout defaults, so values above this are moot
+// without platform-side changes.
+//
+// WriteTimeout is the only inner cap; if it's reached, that means
+// the handler genuinely stalled or made multiple consecutive
+// long-running on-prem calls — both pathological enough that
+// timing out is the right answer.
+//
+// ReadTimeout stays at 60s because it bounds *client → server* body
+// transfer; the request bodies the template ships are small JSON, and
+// 60s on a slow body upload is already deep into Slowloris territory.
+//
+// A handler that legitimately needs an even longer write window
+// (large-file streaming, long-poll) should override per-request via
+// http.NewResponseController(w).SetWriteDeadline(...) rather than
+// raising this default — looser global timeouts re-open the
+// slow-client surface for every other route.
+func newHTTPServer(port string, r *gin.Engine) *http.Server {
+	return &http.Server{
+		Addr:              ":" + port,
+		Handler:           compress(contentLengthGuard(r)),
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       60 * time.Second,
+		WriteTimeout:      900 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 }
 
