@@ -122,10 +122,13 @@ jobs:
         run: |
           cf push "$BACKEND_HOST" -f manifest.yml --vars-file vars.yml
 
+      # Optional — see README §"Do you need the approuter?" for dropping it.
       - name: cf push — approuter (nodejs_buildpack per manifest)
         run: |
           cf push "${BACKEND_HOST}-web" -f manifest.yml --vars-file vars.yml
 
+      # Targets the approuter host; a fork that dropped the approuter
+      # targets the backend host (README §"Do you need the approuter?").
       - name: Smoke test — /healthz + /version
         run: |
           base="https://${BACKEND_HOST}-web.${DOMAIN}"

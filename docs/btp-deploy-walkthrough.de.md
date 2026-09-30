@@ -11,6 +11,12 @@ Ziel: Ein:e andere:r Entwickler:in kann den Ablauf auf einer ähnlichen Umgebung
 Die autoritative Checkliste liegt in [Issue #4](https://github.com/Hochfrequenz/go-sap-btp-cf-template/issues/4).
 Dieses Walkthrough ergänzt sie um reale URLs, tatsächlich beobachtete Cockpit-Labels und Abweichungen.
 
+> [!NOTE]
+> Dieses Walkthrough beschreibt gezielt den Deploy **mit** Approuter (`web/`). Der Approuter ist im
+> Template zwar standardmäßig aktiv, aber optional — siehe README §"Do you need the approuter?".
+> Ein Fork ohne Browser-Nutzer:innen lässt die approuter-spezifischen Schritte (u. a. die
+> Redirect-URI-Konfiguration) weg und spricht den Backend-Host direkt an.
+
 ---
 
 ## Umgebung

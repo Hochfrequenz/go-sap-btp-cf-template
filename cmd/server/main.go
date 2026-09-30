@@ -332,7 +332,8 @@ func (w *clGuardWriter) CloseNotify() <-chan bool {
 // The four timeouts cover four distinct slow-client failure modes; any
 // one missing leaves a goroutine leak vector against a backend that is
 // directly internet-reachable on its .cfapps.* route (not only behind
-// the approuter):
+// the approuter, which is optional — see README "Do you need the
+// approuter?"):
 //
 //   - ReadHeaderTimeout (10s):  Slowloris on request headers.
 //   - ReadTimeout       (60s):  Slow-body POSTs (client → server).
@@ -403,9 +404,9 @@ func buildRouter(authMW gin.HandlerFunc, caller btpingo.OnPremCaller, mutator bt
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
 	// The backend app is directly reachable on its .cfapps.* route, not
-	// only via the approuter. Trusting every upstream for X-Forwarded-For
-	// would let a direct caller forge c.ClientIP(). nil trusts nobody; the
-	// logged IP is always the real TCP peer.
+	// only via the (optional) approuter. Trusting every upstream for
+	// X-Forwarded-For would let a direct caller forge c.ClientIP(). nil
+	// trusts nobody; the logged IP is always the real TCP peer.
 	_ = r.SetTrustedProxies(nil)
 	// Middleware order matters. Outermost is recoverPanic — its deferred
 	// recover() must wrap every other handler so a panic anywhere in the
@@ -546,8 +547,9 @@ func recoverPanic() gin.HandlerFunc {
 //
 //   - Strict-Transport-Security: a year, includeSubDomains. The backend
 //     is reachable on its .cfapps.* route directly, not just behind the
-//     approuter, so every response that crosses the public internet
-//     should pin TLS for future requests.
+//     approuter (which is optional to begin with — see README "Do you
+//     need the approuter?"), so every response that crosses the public
+//     internet should pin TLS for future requests.
 //   - X-Content-Type-Options: nosniff. Suppresses MIME-sniffing on
 //     anything we serve, in case a buggy proxy ever rewrites a
 //     Content-Type.
