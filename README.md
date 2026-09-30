@@ -1039,7 +1039,7 @@ Four different timeouts gate it; three are set by this template, the fourth is d
 | `DefaultOnPremiseTimeout` | 600 s   | Per-call timeout on `*btpingo.Service`'s on-prem `*http.Client`. ADT-through-CC calls regularly take minutes; observed worst case ~5 minutes. 10 minutes is the per-call ceiling. Override per-instance with `btpingo.WithOnPremiseTimeout(...)` when the fork's SAP is reliably faster. |
 
 The two values are intentionally **asymmetric**: `WriteTimeout` (one budget for the whole handler) sits 5 min above `DefaultOnPremiseTimeout` (one budget per on-prem call).
-On a CSRF mutating route — `HEAD/GET` for the token, then `POST` — each leg gets its own 10-min on-prem budget; the 15-min `WriteTimeout` covers both legs plus response write without racing the on-prem timeout.
+On a CSRF mutating route — `HEAD/GET` for the token, then `POST` — each leg gets its own 10-min on-prem budget. The 15-min `WriteTimeout` leaves 5 minutes of headroom over one full-budget leg, so a single hung call still surfaces as `upstream_unreachable`; if both legs hang, `WriteTimeout` fires first and the request fails without the envelope.
 Result: a hung SAP always surfaces as a clean `upstream_unreachable` envelope from the on-prem layer, never as a server-side write timeout.
 
 **CF Gorouter (deployment-managed):** The CF route layer has its own per-request timeout (typically ~900 s, varies by foundation/landscape).
