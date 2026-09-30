@@ -121,17 +121,26 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Self-test scan_gate's own error handling
+      - name: Self-test scan_gate's own exit-code contract
         run: |
           set -euo pipefail
           source "$GITHUB_WORKSPACE/.github/scripts/scan-gate.sh"
-          # A scan tool that errors (here: exits 2, same as rg/grep -r on
-          # an unreadable file) must make scan_gate fail, not pass.
-          if scan_gate "self-test: should not be printed" sh -c 'exit 2'; then
-            echo "::error::scan_gate self-test failed: it passed when the wrapped command exited 2 (tool error), instead of failing the gate." >&2
-            exit 1
-          fi
-          echo "OK: scan_gate fails when the wrapped scan tool itself errors (exit 2)."
+          # stderr is discarded per case so the ::error:: lines scan_gate prints
+          # on the expected-failure cases don't become annotations on a green run.
+          expect() { # expect <want-rc> <cmd...>
+            local want=$1 got=0
+            shift
+            scan_gate "self-test" "$@" 2>/dev/null || got=$?
+            if [ "$got" -ne "$want" ]; then
+              echo "::error::scan_gate self-test: '$*' returned $got, want $want." >&2
+              exit 1
+            fi
+          }
+          expect 1 true                        # exit 0: match      -> gate fails
+          expect 0 false                       # exit 1: no match   -> gate passes
+          expect 1 sh -c 'exit 2'              # exit 2: tool error -> gate fails
+          expect 1 scan-gate-self-test-missing # exit 127           -> gate fails
+          echo "OK: scan_gate maps exit 0/1/2/127 to fail/pass/fail/fail."
 
       - name: Install ripgrep
         run: sudo apt-get update && sudo apt-get install -y ripgrep

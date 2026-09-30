@@ -22,6 +22,15 @@
 # this function's caller may run it in. The exit code is captured
 # explicitly instead, with `rc=0; "$@" || rc=$?`.
 #
+# <cmd...> is a single simple command run as "$@": it cannot be a
+# pipeline. `scan_gate msg rg ... | grep ...` pipes scan_gate's output,
+# not rg's. Wrap a pipeline in `bash -c '...'` if one is ever needed.
+#
+# The message is printed verbatim (no escape processing, so regex text
+# such as `\b` survives). A second annotation line is a real newline in
+# the message followed by a literal `::error::`; inside a `run: |` block
+# write the continuation line at the block's own indentation.
+#
 # Call this as a plain statement, not as `if scan_gate ...; then`:
 #   source "$GITHUB_WORKSPACE/.github/scripts/scan-gate.sh"
 #   scan_gate "<message shown when the gate fails>" rg -n ... 'pattern' .
