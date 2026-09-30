@@ -114,5 +114,5 @@ func Test_RequireJSONBody_SafeMethodsUnaffected(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
-	then.AssertThat(t, w.Code, is.Not(is.EqualTo(http.StatusUnsupportedMediaType)))
+	then.AssertThat(t, w.Code, is.EqualTo(http.StatusOK))
 }

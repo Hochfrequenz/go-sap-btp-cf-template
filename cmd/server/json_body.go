@@ -56,7 +56,7 @@ func requireJSONBody() gin.HandlerFunc {
 		mediaType, _, err := mime.ParseMediaType(c.Request.Header.Get("Content-Type"))
 		if err != nil || !isJSONMediaType(mediaType) {
 			ginpingo.AbortError(c, http.StatusUnsupportedMediaType, btpingo.CodeInvalidRequest,
-				"request body must be application/json", nil)
+				"request body must be application/json or application/*+json", nil)
 			return
 		}
 		c.Next()
