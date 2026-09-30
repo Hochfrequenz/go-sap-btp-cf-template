@@ -21,6 +21,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humagin"
 	"github.com/gin-gonic/gin"
+	"github.com/klauspost/compress/gzhttp"
 
 	"github.com/hochfrequenz/btpingo"
 	"github.com/hochfrequenz/btpingo/ginpingo"
@@ -106,7 +107,7 @@ func main() {
 	// slow-client surface for every other route.
 	srv := &http.Server{
 		Addr:              ":" + port,
-		Handler:           r,
+		Handler:           compress(r),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       60 * time.Second,
 		WriteTimeout:      900 * time.Second,
@@ -169,6 +170,53 @@ func logLevelFromEnv() slog.Level {
 			raw)
 		return slog.LevelInfo
 	}
+}
+
+// compress wraps the given handler with gzhttp's response compression at
+// the net/http level — OUTSIDE the Gin engine, not as a Gin middleware.
+//
+// A prior design (github.com/hochfrequenz/btpingo#7's proposed
+// ginpingo.Gzip()) wrapped gin.ResponseWriter directly and was abandoned
+// (btpingo#8) after review found late writes, per-write flushing, and
+// wrong behaviour on 206/already-sent-header responses — Gin's writer
+// makes those hard to get right from inside the framework. Wrapping the
+// whole http.Handler that http.Server dispatches to sidesteps all of
+// that: gzhttp sees a plain http.ResponseWriter and Gin never knows
+// compression happened.
+//
+// This is why buildRouter itself is untouched: it keeps returning
+// *gin.Engine (see Test_RouterAllowList), and only main's
+// http.Server.Handler assignment changes. Tests exercise this exact
+// wrapper (not a hand-rolled substitute) via httptest.Server so the
+// tested wiring matches production.
+//
+// gzhttp defaults are kept, INCLUDING its zstd support (not gzip-only):
+//   - Negotiation is per-request via Accept-Encoding, so a client that
+//     never advertises "zstd" (curl, older browsers, most non-browser
+//     BTP-internal callers) simply gets gzip; nothing about restricting
+//     to gzip-only would change what such a client receives.
+//   - The SAP approuter sits in front of the browser-facing route
+//     (web/xs-app.json proxies "/api/*" to this backend). The approuter
+//     applies its OWN response compression using the same building
+//     block as Express' "compression" middleware, whose documented
+//     default behaviour is to skip compressing a response that already
+//     carries a Content-Encoding header — precisely to avoid
+//     double-encoding a body a backend already compressed. So whichever
+//     encoding gzhttp picks here is expected to pass the approuter
+//     through to the browser unchanged, not be re-wrapped or rejected.
+//   - Restricting to gzip only would remove real bandwidth savings for
+//     zstd-capable clients for no compatibility benefit this template
+//     can identify, so the default (gzip + zstd, chosen per request)
+//     is kept as-is.
+//
+// gzhttp also keeps its own minimum-size threshold and content-type
+// skip list, so /healthz's tiny "ok" body and huma's already-compact
+// responses under that threshold are left alone, and non-compressible
+// content types (already-compressed upstream bodies included, since
+// those already set Content-Encoding) are passed through untouched
+// rather than double-compressed.
+func compress(h http.Handler) http.Handler {
+	return gzhttp.GzipHandler(h)
 }
 
 // buildRouter wires the Gin router from its abstract dependencies —

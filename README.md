@@ -13,6 +13,7 @@ Fork it, fill in one `config.yml`, `cf push` and you get a production-grade Go b
 | **CSRF on writes**   | Automatic fetch → attach → retry; one `svc.CallOnPremiseMutating(…)` call                                                                                                                                         |
 | **Typed handlers**   | Two demo endpoints (`GET /api/adt-discovery`, `POST /api/adt-checkrun`) with request validation, typed responses, and one-method-fake tests                                                                       |
 | **Error envelope**   | `ginpingo.AbortError` + stable JSON error shape with request IDs                                                                                                                                                  |
+| **Compression**      | Responses gzip-compressed on request via [`gzhttp`](https://github.com/klauspost/compress/tree/master/gzhttp), wrapped around the whole server at the `http.Server` level                                         |
 | **CI / CD**          | GitHub Actions pipeline: lint, test, template-guards, `cf push` to Cloud Foundry                                                                                                                                  |
 | **Fork tooling**     | `go run ./cmd/apply-config` rewrites module path, app name, CF coordinates, and destination names from `config.yml` — one command, whole tree                                                                     |
 
@@ -271,6 +272,8 @@ Two things to apply the same discipline to, that are easy to forget:
 `cmd/server/main.go` installs `ginpingo.MaxBodySize(ginpingo.DefaultMaxBodyBytes)` (1 MiB) globally.
 Any request whose `Content-Length` announces more, or that streams more under chunked / lying-Content-Length, is rejected with a typed `413` envelope (`code: "request_too_large"`) before reaching the Gin binder.
 The cap protects the app's 128 MiB CF memory quota from a single oversized POST.
+
+Relatedly, `manifest.yml`'s backend app sets `GOMEMLIMIT: 100MiB` (~80% of `memory: 128M`) so the Go runtime feels the container's memory pressure instead of relying solely on the kernel's OOM killer. **If your fork raises `memory:` for a data-heavy API, raise `GOMEMLIMIT` together with it**, at roughly the same ~80% ratio — `.github/workflows/template-guards.yml` fails the build if `GOMEMLIMIT` is missing, malformed, `off`, below 16MiB, or not below `memory:`.
 
 For a route that legitimately needs more (large-file import, batch upload), install a per-route override before the handler:
 
@@ -604,6 +607,7 @@ buildpacks:
   - go_buildpack
 env:
   GIN_MODE: release
+  GOMEMLIMIT: 100MiB
   GO_INSTALL_PACKAGE_SPEC: ./cmd/server
 ```
 
@@ -613,6 +617,7 @@ buildpacks:
   - paketo-buildpacks/go
 env:
   GIN_MODE: release
+  GOMEMLIMIT: 100MiB
   BP_GO_TARGETS: ./cmd/server
 ```
 
@@ -963,6 +968,12 @@ Result: a hung SAP always surfaces as a clean `upstream_unreachable` envelope fr
 It bounds _both_ of the above — the 900 s `WriteTimeout` is intentionally aligned with that ceiling. If a fork legitimately needs longer than the route allows, raising the values here is moot — the platform owner has to extend the route timeout.
 
 If a single handler legitimately needs longer than 900 s — large-file streaming, long-poll, exceptionally slow batch — override per-request with `http.NewResponseController(w).SetWriteDeadline(...)` (server side) **and** wrap the on-prem client (or pass a different `WithOnPremiseTimeout` to a dedicated `*btpingo.Service` instance for that route). Loosening the global defaults re-opens the slow-client surface for every other route.
+
+### Response compression
+
+Every response — root routes (`/healthz`, `/version`) and the `/api/*` group alike — is gzip-compressed on request. `cmd/server/main.go` wraps the whole `*gin.Engine` with [`gzhttp.GzipHandler`](https://github.com/klauspost/compress/tree/master/gzhttp) (`github.com/klauspost/compress`) at the `http.Server.Handler` level, **outside** Gin, not as Gin middleware — an earlier design that wrapped Gin's own response writer had late-write and partial-response bugs that this net/http-level wrapping avoids entirely. `buildRouter` keeps returning a plain `*gin.Engine`; only the `http.Server{Handler: compress(r)}` line changes.
+
+gzhttp's defaults are kept as-is, including its zstd support — negotiation is per-request via `Accept-Encoding`, gzhttp already skips a response a handler already compressed itself (e.g. a proxied upstream body), and it leaves small bodies (under ~1 KiB) alone. A fork that wants compression off entirely can drop the `compress(...)` call and pass `r` straight to `http.Server.Handler`.
 
 ## How it works under the hood
 
