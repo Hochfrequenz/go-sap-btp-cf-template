@@ -124,9 +124,7 @@ func logLevelFromEnv() slog.Level {
 // *gin.Engine wrapped with btpingo.CompressHandler — response
 // compression plus the Content-Length truncation/overflow guard that
 // sits between compression and the handler (see btpingo's compress.go
-// for that guard's design and the two fixes it carries over the
-// template's former hand-rolled copy: latching implicit headers and
-// exempting hijacked connections) — plus the four slow-client timeouts
+// for that guard's design) — plus the four slow-client timeouts
 // below. It is a function (not inlined in main) so
 // cmd/server/server_test.go can exercise the exact production wiring —
 // compression, the guard, and the timeout values — through one real

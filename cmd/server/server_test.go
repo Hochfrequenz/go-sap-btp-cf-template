@@ -337,14 +337,11 @@ func Test_newHTTPServer_GinStreamAndHijack_Work(t *testing.T) {
 	}
 }
 
-// Test_newHTTPServer_UnknownRoute_404Body is the regression test for the
-// bug that killed the earlier gin-level ginpingo.Gzip() approach: a
-// response for a route Gin doesn't recognise must still carry gin's real
-// 404 body, not an empty one, through the exact production Handler
-// (btpingo.CompressHandler(r), as newHTTPServer wires it). Gin's default
-// 404 body ("404 page not found") is well below gzhttp's 1 KiB MinSize,
-// so even with Accept-Encoding: gzip this particular response is left
-// uncompressed — the branch below handles both cases regardless.
+// Test_newHTTPServer_UnknownRoute_404Body proves gin's real 404 body
+// survives the production Handler (btpingo.CompressHandler(r), as
+// newHTTPServer wires it). Gin's default 404 body ("404 page not found")
+// is well below gzhttp's 1 KiB MinSize, so even with Accept-Encoding: gzip
+// it must arrive uncompressed and non-empty.
 func Test_newHTTPServer_UnknownRoute_404Body(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	r := buildRouter(func(c *gin.Context) { c.Next() }, fakeRouteCaller{}, fakeRouteMutator{}, logger)
@@ -367,17 +364,10 @@ func Test_newHTTPServer_UnknownRoute_404Body(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read body: %v", err)
 	}
-	body := raw
-	if resp.Header.Get("Content-Encoding") == "gzip" {
-		zr, err := gzip.NewReader(bytes.NewReader(raw))
-		if err != nil {
-			t.Fatalf("gzip.NewReader: %v", err)
-		}
-		body, err = io.ReadAll(zr)
-		if err != nil {
-			t.Fatalf("gzip read: %v", err)
-		}
+	if ce := resp.Header.Get("Content-Encoding"); ce != "" {
+		t.Fatalf("Content-Encoding = %q, want none: gin's 404 is below gzhttp's MinSize", ce)
 	}
+	body := raw
 	if len(body) == 0 {
 		t.Fatalf("404 body is empty; want gin's real not-found body")
 	}
