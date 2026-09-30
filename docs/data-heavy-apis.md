@@ -36,16 +36,15 @@ matter whether the caller buffers with `io.ReadAll` or streams with `io.Copy` /
 - **Buffering** (`io.ReadAll`): the error surfaces from the `ReadAll` call itself, before any
   response has gone to the client. A handler can still turn it into a clean `502`.
 - **Streaming** (`c.DataFromReader`, `io.Copy`, `ginpingo.ProxyHandler`): the `200` and headers are
-  already sent when the cap trips. If a `Content-Length` was forwarded, `contentLengthGuard` in
-  `cmd/server/main.go` sees the short write and aborts the connection, so the client gets an
-  unexpected EOF, with or without compression. If there is none — always the case for a typed
-  handler, whose transport-decompressed body has `ContentLength == -1` — the response ends
-  cleanly: a proper final chunk or a complete gzip/zstd stream, just shorter. No HTTP-level check
+  already sent when the cap trips. If a `Content-Length` was forwarded (SAP sent one and Go's
+  transport didn't decompress the body), `contentLengthGuard` in `cmd/server/main.go` sees the short
+  write and aborts the connection, so the client gets an unexpected EOF, with or without
+  compression. If there is none (SAP answered chunked, or gzipped so that Go's transport
+  decompressed it and `resp.ContentLength` is `-1`, which is what a typed handler gets whenever SAP
+  compresses), the response ends cleanly: a proper final chunk or a complete gzip/zstd stream, just
+  shorter. No HTTP-level check
   can tell it apart from a complete response. Only the payload itself can (see "Payload shape").
   The same happens if `DefaultOnPremiseTimeout` fires mid-body (see "Timeouts").
-
-The response write itself also counts against the server's `WriteTimeout` — a large page that's
-slow to write can hit that timeout as well as, or instead of, the size cap.
 
 **What the cap counts depends on who asked for compression.** A typed handler (all three examples)
 forwards no `Accept-Encoding`, so Go's transport requests gzip itself, decompresses transparently,
@@ -106,12 +105,14 @@ returned promptly, and a single route that legitimately needs longer gets the sa
 loosening the global defaults.
 
 For a streamed response the whole body transfer counts against `DefaultOnPremiseTimeout` too, since
-`http.Client.Timeout` includes reading the body. A 10-minute stream is cut at 600 s, mid-body,
-before `WriteTimeout` is reached.
+`http.Client.Timeout` includes reading the body: a stream still running 600 s after the request
+started is cut mid-body, before the 900 s `WriteTimeout` is reached, and ends the same way as a cap
+hit (see ["The on-premise response cap"](#the-on-premise-response-cap)).
 
-Two more hops sit in the path. **The approuter** (`@sap/approuter` 23.0.0) gives each destination a
-default `timeout` of 30 000 ms, an inactivity timer on the backend connection that answers 504 when
-it fires. `manifest.yml`'s `GoBackend` destination sets none, so a request through the approuter
+Two more hops sit in the path besides the CF Gorouter (covered in that README section). **The
+approuter** (`@sap/approuter` 23.0.0) gives each destination a default `timeout` of 30 000 ms, an
+inactivity timer on the backend connection that answers 504 when it fires, and that cuts the body
+short if the stall happens after the `200` has gone out. `manifest.yml`'s `GoBackend` destination sets none, so a request through the approuter
 fails after 30 s of silence from this backend, long before `DefaultOnPremiseTimeout` or
 `WriteTimeout` matter. Nothing flows until SAP has answered, and an ABAP handler answers only once
 the whole page is built. For a slow route, add `"timeout": <ms>` to the `GoBackend` entry in
