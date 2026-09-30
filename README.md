@@ -1012,10 +1012,16 @@ The authenticator registry is where Auth0/SSO/`OAuth2ClientCredentials`/`Princip
 
 For Principal Propagation specifically: the approuter-forwarded user JWT is stashed in the request context under `btpingo.ForwardedUserTokenKey{}` — a PP authenticator reads it from there and sets `SAP-Connectivity-Authentication`.
 
-### Timeouts — three layers, two of them ours
+### Timeouts — four layers, three of them ours
 
 A request that fans out to a legacy on-prem SAP system can sit on the wire for minutes.
-Three different timeouts gate it; two are set by this template, the third is deployment-managed.
+Four different timeouts gate it; three are set by this template, the fourth is deployment-managed. The approuter layer applies only to requests that go through the approuter; clients calling the backend's own route skip it.
+
+**Approuter destination (`manifest.yml`):**
+
+| Setting                             | Default | Why                                                                                                                                                                                                                                                                                                                                                                                                               |
+| ----------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `timeout` (`GoBackend` destination) | 900 s   | `@sap/approuter`'s own default is a 30 s inactivity timeout per destination, answering `504` if the backend socket goes quiet that long — far too short for a request that's waiting on the on-prem call below. Set to `900000` ms to match `WriteTimeout`: the Go server can't answer after 900 s anyway, so a larger value gains nothing and a smaller one would cut requests the Go server would still answer. |
 
 **HTTP server (`cmd/server/main.go`):**
 
@@ -1033,11 +1039,13 @@ Three different timeouts gate it; two are set by this template, the third is dep
 | `DefaultOnPremiseTimeout` | 600 s   | Per-call timeout on `*btpingo.Service`'s on-prem `*http.Client`. ADT-through-CC calls regularly take minutes; observed worst case ~5 minutes. 10 minutes is the per-call ceiling. Override per-instance with `btpingo.WithOnPremiseTimeout(...)` when the fork's SAP is reliably faster. |
 
 The two values are intentionally **asymmetric**: `WriteTimeout` (one budget for the whole handler) sits 5 min above `DefaultOnPremiseTimeout` (one budget per on-prem call).
-On a CSRF mutating route — `HEAD/GET` for the token, then `POST` — each leg gets its own 10-min on-prem budget; the 15-min `WriteTimeout` covers both legs plus response write without racing the on-prem timeout.
-Result: a hung SAP always surfaces as a clean `upstream_unreachable` envelope from the on-prem layer, never as a server-side write timeout.
+On a CSRF mutating route — a `GET` with `X-CSRF-Token: Fetch` (only when no token is cached), then the `POST` — each on-prem call gets its own 10-min budget, while the 15-min `WriteTimeout` is one budget for the whole handler.
+A call that hangs outright still surfaces as `upstream_unreachable`: a hung token fetch times out at 10 min and the `POST` never runs; a hung `POST` after a cached or quick fetch times out well inside the 15 min.
+Only if the earlier calls in the request have already used more than 5 minutes (a slow fetch that succeeds, or a re-fetch after SAP's `403` with `X-CSRF-Token: Required`) and the last call then hangs does `WriteTimeout` expire first: Go can no longer write the envelope, so the approuter answers its own `504` at 900 s, and a direct caller gets the Gorouter's timeout or a connection closed without a response.
+Result: a hung SAP surfaces as a clean `upstream_unreachable` envelope from the on-prem layer, except in that slow-call-then-hang case.
 
 **CF Gorouter (deployment-managed):** The CF route layer has its own per-request timeout (typically ~900 s, varies by foundation/landscape).
-It bounds _both_ of the above — the 900 s `WriteTimeout` is intentionally aligned with that ceiling. If a fork legitimately needs longer than the route allows, raising the values here is moot — the platform owner has to extend the route timeout.
+It bounds _all three_ of the above — the 900 s `WriteTimeout` (and the approuter's matching `timeout`) is intentionally aligned with that ceiling. If a fork legitimately needs longer than the route allows, raising the values here is moot — the platform owner has to extend the route timeout.
 
 If a single handler legitimately needs longer than 900 s — large-file streaming, long-poll, exceptionally slow batch — override per-request with `http.NewResponseController(w).SetWriteDeadline(...)` (server side) **and** wrap the on-prem client (or pass a different `WithOnPremiseTimeout` to a dedicated `*btpingo.Service` instance for that route). Loosening the global defaults re-opens the slow-client surface for every other route.
 

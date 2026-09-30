@@ -98,8 +98,8 @@ responses stop being small and fixed-size.
 ## Timeouts across the chain
 
 The Go-side pair — `http.Server.WriteTimeout` (900 s) and `btpingo.DefaultOnPremiseTimeout` (10
-min, asymmetric on purpose) — is already documented in [the "Timeouts — three layers, two of them
-ours" section](../README.md#timeouts--three-layers-two-of-them-ours); this doesn't repeat that
+min, asymmetric on purpose) — is already documented in [the "Timeouts — four layers, three of them
+ours" section](../README.md#timeouts--four-layers-three-of-them-ours); this doesn't repeat that
 table. What that section adds for the latency case applies here for the payload-size case too: a
 large response that's slow to write can exhaust `WriteTimeout` even if the on-premise call itself
 returned promptly, and a single route that legitimately needs longer gets the same escape hatch —
@@ -115,12 +115,13 @@ hit (see ["The on-premise response cap"](#the-on-premise-response-cap)).
 Two more hops sit in the path besides the CF Gorouter (covered in that README section). **The
 approuter** (`@sap/approuter` 23.0.0) gives each destination a default `timeout` of 30 000 ms, an
 inactivity timer on the backend connection that answers 504 when it fires, and that cuts the body
-short if the stall happens after the `200` has gone out. `manifest.yml`'s `GoBackend` destination sets none, so a request through the approuter
-fails after 30 s of silence from this backend, long before `DefaultOnPremiseTimeout` or
-`WriteTimeout` matter. Nothing flows until SAP has answered, and an ABAP handler answers only once
-the whole page is built. For a slow route, add `"timeout": <ms>` to the `GoBackend` entry in
-`manifest.yml`, or keep pages small enough to answer well inside 30 s. **The Cloud Connector** may
-have its own ceiling. This repo doesn't set it — check for your landscape.
+short if the stall happens after the `200` has gone out. `manifest.yml`'s `GoBackend` destination
+sets `"timeout": 900000`, matching `WriteTimeout`, so a request through the approuter gets the same
+900 s budget the Go server itself has, rather than failing after 30 s of silence from this backend
+long before `DefaultOnPremiseTimeout` or `WriteTimeout` ever matter. Nothing flows until SAP has
+answered, and an ABAP handler answers only once the whole page is built — a slow page is now bounded by
+`DefaultOnPremiseTimeout` (600 s), not by the approuter's 30 s default. **The Cloud Connector** may have its
+own ceiling. This repo doesn't set it — check for your landscape.
 
 ## Compression
 
@@ -166,7 +167,7 @@ above.
 Make the cursor a **unique** key: if several series share a timestamp, carry `(series id,
 timestamp)`, not the timestamp alone, or rows are lost or duplicated at page boundaries. Use
 half-open windows (`from` inclusive, `to` exclusive). Enforce a server-side maximum page size that
-fits under the size cap and the approuter timeout.
+fits under the size cap and the on-prem timeout.
 
 ## Sizing memory and instances
 
