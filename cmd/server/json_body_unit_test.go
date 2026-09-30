@@ -36,13 +36,15 @@ func Test_RequireJSONBody_Methods(t *testing.T) {
 		{"HEAD text/plain body", http.MethodHead, "text/plain", "x", http.StatusNoContent},
 		{"OPTIONS text/plain body", http.MethodOptions, "text/plain", "x", http.StatusNoContent},
 		{"DELETE no body no CT", http.MethodDelete, "", "", http.StatusNoContent},
+		{"PUT no body no CT", http.MethodPut, "", "", http.StatusNoContent},
+		{"PATCH no body no CT", http.MethodPatch, "", "", http.StatusNoContent},
 		{"DELETE text/plain body", http.MethodDelete, "text/plain", "x", http.StatusUnsupportedMediaType},
 		{"PUT text/plain body", http.MethodPut, "text/plain", "x", http.StatusUnsupportedMediaType},
 		{"POST no body no CT", http.MethodPost, "", "", http.StatusUnsupportedMediaType},
 		{"POST upper-case type", http.MethodPost, "Application/JSON", "{}", http.StatusNoContent},
 		{"POST trailing semicolon", http.MethodPost, "application/json;", "{}", http.StatusNoContent},
 		{"PATCH merge-patch+json", http.MethodPatch, "application/merge-patch+json", "{}", http.StatusNoContent},
-		{"POST text/plus+json is not application/*", http.MethodPost, "text/x+json", "{}", http.StatusUnsupportedMediaType},
+		{"POST text/x+json is not application/*", http.MethodPost, "text/x+json", "{}", http.StatusUnsupportedMediaType},
 	}
 	// Unknown length (ContentLength -1, as for a chunked body) counts as a
 	// body: io.MultiReader hides the length from httptest.NewRequest.

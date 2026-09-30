@@ -87,7 +87,7 @@ turn it off — but nothing about the backend requires it, and a fork is free to
   checks signature, audience and expiry (`btpingo`'s `auth.go`) the same way either way.
 - Such a token carries no user: `user_name`/`email` claims are absent, Principal Propagation has no
   user JWT to forward, and `/api/docs` can no longer be opened in a browser.
-- Writes must still send `Content-Type: application/json` (`requireJSONBody`).
+- Writes that carry a body must still be JSON (`application/json` or `application/*+json`; see [JSON-only writes](#json-only-writes)).
 
 **To remove it:**
 
@@ -629,7 +629,7 @@ If you do hit a wall, [How it works under the hood](#how-it-works-under-the-hood
 ### When you need to look deeper
 
 - **Your Destination uses Principal Propagation, not Basic Auth.** The approuter-forwarded user JWT is stashed in the request context under `btpingo.ForwardedUserTokenKey{}`; implement a `DestinationAuthenticator` that reads it and sets `SAP-Connectivity-Authentication`. See "Extension points" below.
-- **Your on-prem endpoint needs CSRF tokens for writes** (most ADT writes do). Use `svc.CallOnPremiseMutating` — it runs the `X-CSRF-Token: Fetch` → attach-token-and-cookies → retry-once-on-403 dance transparently. See [Calling SAP with a POST — the CSRF case](#calling-sap-with-a-post--the-csrf-case) below.
+- **Your on-prem endpoint needs CSRF tokens for writes** (most ADT writes do). Use `svc.CallOnPremiseMutating` — it runs the `X-CSRF-Token: Fetch` → attach-token-and-cookies → retry-once-on-403 dance transparently. See [Calling SAP with a POST — the CSRF case](#calling-sap-with-a-post--csrf) below.
 - **One of the demo endpoints (`/api/adt-discovery`, `/api/adt-checkrun`) returns 502 or an unexpected 401.** See the failure-mode ladder under "Smoke tests" below.
 
 ## Deployment
