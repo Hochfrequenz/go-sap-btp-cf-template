@@ -119,8 +119,8 @@ short if the stall happens after the `200` has gone out. `manifest.yml`'s `GoBac
 sets `"timeout": 900000`, matching `WriteTimeout`, so a request through the approuter gets the same
 900 s budget the Go server itself has, rather than failing after 30 s of silence from this backend
 long before `DefaultOnPremiseTimeout` or `WriteTimeout` ever matter. Nothing flows until SAP has
-answered, and an ABAP handler answers only once the whole page is built — a slow page is bounded by
-the 900 s ceiling above, not by the approuter's 30 s default. **The Cloud Connector** may have its
+answered, and an ABAP handler answers only once the whole page is built — a slow page is now bounded by
+`DefaultOnPremiseTimeout` (600 s), not by the approuter's 30 s default. **The Cloud Connector** may have its
 own ceiling. This repo doesn't set it — check for your landscape.
 
 ## Compression
@@ -167,7 +167,7 @@ above.
 Make the cursor a **unique** key: if several series share a timestamp, carry `(series id,
 timestamp)`, not the timestamp alone, or rows are lost or duplicated at page boundaries. Use
 half-open windows (`from` inclusive, `to` exclusive). Enforce a server-side maximum page size that
-fits under the size cap and the approuter timeout.
+fits under the size cap and the on-prem timeout.
 
 ## Sizing memory and instances
 

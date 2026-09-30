@@ -1007,13 +1007,13 @@ For Principal Propagation specifically: the approuter-forwarded user JWT is stas
 ### Timeouts — four layers, three of them ours
 
 A request that fans out to a legacy on-prem SAP system can sit on the wire for minutes.
-Four different timeouts gate it; three are set by this template, the fourth is deployment-managed.
+Four different timeouts gate it; three are set by this template, the fourth is deployment-managed. The approuter layer applies only to browser traffic; machine clients calling the backend directly skip it.
 
 **Approuter destination (`manifest.yml`):**
 
 | Setting                             | Default | Why                                                                                                                                                                                                                                                                                                                                                                                    |
 | ----------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `timeout` (`GoBackend` destination) | 900 s   | `@sap/approuter`'s own default is a 30 s inactivity timeout per destination, answering `504` if the backend socket goes quiet that long — far too short for a request that's waiting on the on-prem call below. Set to `900000` ms to match `WriteTimeout`: the Go server can't answer any sooner, so a smaller value would only add a spurious failure mode in front of the real one. |
+| `timeout` (`GoBackend` destination) | 900 s   | `@sap/approuter`'s own default is a 30 s inactivity timeout per destination, answering `504` if the backend socket goes quiet that long — far too short for a request that's waiting on the on-prem call below. Set to `900000` ms to match `WriteTimeout`: the Go server can't answer after 900 s anyway, so a larger value gains nothing and a smaller one would cut requests the Go server would still answer. |
 
 **HTTP server (`cmd/server/main.go`):**
 
