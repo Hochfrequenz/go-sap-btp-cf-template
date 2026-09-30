@@ -105,17 +105,42 @@ jobs:
           # `--exclude-dir=apply-config` is what actually skips
           # cmd/apply-config/. Using the full path silently never
           # matches and the gate fires on every run.
-          if grep -rn --include='*.go' --exclude-dir=apply-config \
-              'github.com/hochfrequenz/go-sap-btp-cf-template' .; then
-            echo "::error::stale module path survived apply-config" >&2
-            exit 1
-          fi
+          #
+          # grep -r exits 2 (not 0/1) on an unreadable file or other
+          # scan error, even if it already printed a real match — a
+          # plain `if grep ...; then fail; fi` would let that silently
+          # pass. scan_gate treats that the same as a violation.
+          source "$GITHUB_WORKSPACE/.github/scripts/scan-gate.sh"
+          scan_gate "stale module path survived apply-config" \
+            grep -rn --include='*.go' --exclude-dir=apply-config \
+            'github.com/hochfrequenz/go-sap-btp-cf-template' .
 
   magic_string_gate:
     name: magic-string gate (module path + ./cmd/server)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+
+      - name: Self-test scan_gate's own exit-code contract
+        run: |
+          set -euo pipefail
+          source "$GITHUB_WORKSPACE/.github/scripts/scan-gate.sh"
+          # stderr is discarded per case so the ::error:: lines scan_gate prints
+          # on the expected-failure cases don't become annotations on a green run.
+          expect() { # expect <want-rc> <cmd...>
+            local want=$1 got=0
+            shift
+            scan_gate "self-test" "$@" 2>/dev/null || got=$?
+            if [ "$got" -ne "$want" ]; then
+              echo "::error::scan_gate self-test: '$*' returned $got, want $want." >&2
+              exit 1
+            fi
+          }
+          expect 1 true                        # exit 0: match      -> gate fails
+          expect 0 false                       # exit 1: no match   -> gate passes
+          expect 1 sh -c 'exit 2'              # exit 2: tool error -> gate fails
+          expect 1 scan-gate-self-test-missing # exit 127           -> gate fails
+          echo "OK: scan_gate maps exit 0/1/2/127 to fail/pass/fail/fail."
 
       - name: Install ripgrep
         run: sudo apt-get update && sudo apt-get install -y ripgrep
@@ -231,7 +256,15 @@ jobs:
           # Note: --no-ignore-vcs disables .gitignore-driven skipping so
           # .github/ and other dotfiles are scanned; we re-exclude
           # vendor / node_modules explicitly below.
-          if rg -n --hidden --no-ignore-vcs \
+          #
+          # rg exits 2 (not 0/1) on an unreadable file or other scan
+          # error, even if it already printed a real match — a plain
+          # `if rg ...; then fail; fi` would let that silently pass.
+          # scan_gate treats that the same as a violation.
+          source "$GITHUB_WORKSPACE/.github/scripts/scan-gate.sh"
+          scan_gate "The template module path appeared outside the allow-listed files above.
+          ::error::Either add it to cmd/apply-config so apply-config rewrites the new file, or expand the allow-list in .github/workflows/template-guards.yml." \
+            rg -n --hidden --no-ignore-vcs \
               --glob '!go.mod' --glob '!go.sum' \
               --glob '!*.go' \
               --glob '!cmd/apply-config/**' \
@@ -240,11 +273,7 @@ jobs:
               --glob '!.github/workflows/template-guards.yml' \
               --glob '!.git/**' \
               --glob '!vendor/**' --glob '!node_modules/**' \
-              'github\.com/hochfrequenz/go-sap-btp-cf-template' .; then
-            echo "::error::The template module path appeared outside the allow-listed files above." >&2
-            echo "::error::Either add it to cmd/apply-config so apply-config rewrites the new file, or expand the allow-list in .github/workflows/template-guards.yml." >&2
-            exit 1
-          fi
+              'github\.com/hochfrequenz/go-sap-btp-cf-template' .
 
       - name: No .Warn( log calls — template policy is INFO or DEBUG
         run: |
@@ -258,12 +287,15 @@ jobs:
           # Scanning the production tree only (internal/, cmd/,
           # examples/). README and docs/ are not scanned because prose
           # legitimately discusses .Warn when explaining the policy.
-          if rg -n --hidden --no-ignore-vcs \
+          # rg exits 2 (not 0/1) on an unreadable file or other scan
+          # error, even if it already printed a real match — a plain
+          # `if rg ...; then fail; fi` would let that silently pass.
+          # scan_gate treats that the same as a violation.
+          source "$GITHUB_WORKSPACE/.github/scripts/scan-gate.sh"
+          scan_gate "This repo does not use .Warn(). Elevate to a returned error, or demote to INFO/DEBUG. See README §'Logging — two levels, no warnings'." \
+            rg -n --hidden --no-ignore-vcs \
               --glob 'internal/**' --glob 'cmd/**' --glob 'examples/**' \
-              '\.Warn\(' .; then
-            echo "::error::This repo does not use .Warn(). Elevate to a returned error, or demote to INFO/DEBUG. See README §'Logging — two levels, no warnings'." >&2
-            exit 1
-          fi
+              '\.Warn\(' .
 
       - name: Handlers must depend on btpingo interfaces, not *btpingo.Service
         run: |
@@ -280,14 +312,21 @@ jobs:
           # locations; *btpingo.Service in cmd/server/main.go is allowed
           # (construction only), but not in
           # examples/ or in other cmd/* dirs.
-          if rg -n --hidden --no-ignore-vcs \
+          # rg exits 2 (not 0/1) on an unreadable file or other scan
+          # error, even if it already printed a real match — a plain
+          # `if rg ...; then fail; fi` would let that silently pass.
+          # scan_gate treats that the same as a violation. The former
+          # `2>/dev/null` on this rg call is gone: it hid rg's own
+          # error message on exit 2, so a broken gate here (e.g. if
+          # examples/ or cmd/ were ever removed or renamed) produced
+          # no output at all in the run log.
+          source "$GITHUB_WORKSPACE/.github/scripts/scan-gate.sh"
+          scan_gate "Handlers/wiring must depend on btpingo interfaces (OnPremCaller / OnPremMutator / JWTValidator), not *btpingo.Service directly. See https://pkg.go.dev/github.com/hochfrequenz/btpingo for the library-intent surface (doc.go)." \
+            rg -n --hidden --no-ignore-vcs \
               --glob '!cmd/server/main.go' \
               --glob '!.git/**' \
               --glob '!vendor/**' --glob '!node_modules/**' \
-              '\*btpingo\.Service\b' examples cmd 2>/dev/null; then
-            echo "::error::Handlers/wiring must depend on btpingo interfaces (OnPremCaller / OnPremMutator / JWTValidator), not *btpingo.Service directly. See https://pkg.go.dev/github.com/hochfrequenz/btpingo for the library-intent surface (doc.go)." >&2
-            exit 1
-          fi
+              '\*btpingo\.Service\b' examples cmd
 
       - name: xs-security.json redirect-uris must stay empty in the repo
         run: |
@@ -373,7 +412,14 @@ jobs:
           #                               command in LOG_LEVEL / buildUA
           #                               examples. This directory cannot
           #                               meaningfully drift from the name.
-          if rg -n --hidden --no-ignore-vcs \
+          # rg exits 2 (not 0/1) on an unreadable file or other scan
+          # error, even if it already printed a real match — a plain
+          # `if rg ...; then fail; fi` would let that silently pass.
+          # scan_gate treats that the same as a violation.
+          source "$GITHUB_WORKSPACE/.github/scripts/scan-gate.sh"
+          scan_gate "Hard-coded './cmd/server' appeared outside the allow-listed files above.
+          ::error::Rename it to reference \$APP_NAME (or similar), or expand the allow-list in .github/workflows/template-guards.yml." \
+            rg -n --hidden --no-ignore-vcs \
               --glob '!manifest.yml' \
               --glob '!Procfile' \
               --glob '!Makefile' \
@@ -384,8 +430,4 @@ jobs:
               --glob '!cmd/server/**' \
               --glob '!.git/**' \
               --glob '!vendor/**' --glob '!node_modules/**' \
-              '\./cmd/server' .; then
-            echo "::error::Hard-coded './cmd/server' appeared outside the allow-listed files above." >&2
-            echo "::error::Rename it to reference \$APP_NAME (or similar), or expand the allow-list in .github/workflows/template-guards.yml." >&2
-            exit 1
-          fi
+              '\./cmd/server' .
