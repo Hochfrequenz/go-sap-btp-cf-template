@@ -39,7 +39,8 @@ matter whether the caller buffers with `io.ReadAll` or streams with `io.Copy` /
   already sent when the cap trips. If a `Content-Length` was forwarded (SAP sent one and Go's
   transport didn't decompress the body), `btpingo.CompressHandler`'s internal `contentLengthGuard`
   (wired in `cmd/server/main.go`'s `newHTTPServer`) sees the short write and aborts the connection,
-  so the client gets an unexpected EOF, with or without compression. If there is none, it depends on who decoded the body. `ginpingo.ProxyHandler`
+  so the client gets an unexpected EOF, with or without compression. If there is none, it depends
+  on who decoded the body. `ginpingo.ProxyHandler`
   relays SAP's `Content-Encoding` and the encoded bytes unchanged, so a cut there leaves an
   incomplete gzip stream that the client's decoder rejects. A typed handler whose transport
   decompressed SAP's gzip (so `resp.ContentLength` is `-1`), or any handler reading a chunked

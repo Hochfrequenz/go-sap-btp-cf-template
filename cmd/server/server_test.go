@@ -360,14 +360,13 @@ func Test_newHTTPServer_UnknownRoute_404Body(t *testing.T) {
 		t.Fatalf("status = %d, want 404", resp.StatusCode)
 	}
 
-	raw, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("read body: %v", err)
 	}
 	if ce := resp.Header.Get("Content-Encoding"); ce != "" {
 		t.Fatalf("Content-Encoding = %q, want none: gin's 404 is below gzhttp's MinSize", ce)
 	}
-	body := raw
 	if len(body) == 0 {
 		t.Fatalf("404 body is empty; want gin's real not-found body")
 	}
