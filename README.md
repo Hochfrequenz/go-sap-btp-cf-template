@@ -13,7 +13,7 @@ Fork it, fill in one `config.yml`, `cf push` and you get a production-grade Go b
 | **CSRF on writes**   | Automatic fetch → attach → retry; one `svc.CallOnPremiseMutating(…)` call                                                                                                                                         |
 | **Typed handlers**   | Two demo endpoints (`GET /api/adt-discovery`, `POST /api/adt-checkrun`) with request validation, typed responses, and one-method-fake tests                                                                       |
 | **Error envelope**   | `ginpingo.AbortError` + stable JSON error shape with request IDs                                                                                                                                                  |
-| **Compression**      | Responses gzip-compressed on request via [`gzhttp`](https://github.com/klauspost/compress/tree/master/gzhttp), wrapped around the whole server at the `http.Server` level                                         |
+| **Compression**      | Responses gzip- or zstd-compressed per `Accept-Encoding` (zstd preferred when both are offered) via [`gzhttp`](https://github.com/klauspost/compress/tree/master/gzhttp) at the `http.Server` level               |
 | **CI / CD**          | GitHub Actions pipeline: lint, test, template-guards, `cf push` to Cloud Foundry                                                                                                                                  |
 | **Fork tooling**     | `go run ./cmd/apply-config` rewrites module path, app name, CF coordinates, and destination names from `config.yml` — one command, whole tree                                                                     |
 
@@ -971,9 +971,11 @@ If a single handler legitimately needs longer than 900 s — large-file streamin
 
 ### Response compression
 
-Every response — root routes (`/healthz`, `/version`) and the `/api/*` group alike — is gzip-compressed on request. `cmd/server/main.go` wraps the whole `*gin.Engine` with [`gzhttp.GzipHandler`](https://github.com/klauspost/compress/tree/master/gzhttp) (`github.com/klauspost/compress`) at the `http.Server.Handler` level, **outside** Gin, not as Gin middleware — an earlier design that wrapped Gin's own response writer had late-write and partial-response bugs that this net/http-level wrapping avoids entirely. `buildRouter` keeps returning a plain `*gin.Engine`; only the `http.Server{Handler: compress(r)}` line changes.
+Every response over ~1 KiB — root routes and `/api/*` alike — is compressed when the client asks: zstd if `Accept-Encoding` offers it (current browsers do), otherwise gzip. `cmd/server/main.go`'s `newHTTPServer` wraps the whole `*gin.Engine` with [`gzhttp.GzipHandler`](https://github.com/klauspost/compress/tree/master/gzhttp) (`github.com/klauspost/compress`) at the `http.Server.Handler` level, **outside** Gin, not as Gin middleware — an earlier design that wrapped Gin's own response writer had late-write and partial-response bugs that this net/http-level wrapping avoids entirely. `buildRouter` keeps returning a plain `*gin.Engine`; only `newHTTPServer`'s `Handler: compress(contentLengthGuard(r))` line changes.
 
 gzhttp's defaults are kept as-is, including its zstd support — negotiation is per-request via `Accept-Encoding`, gzhttp already skips a response a handler already compressed itself (e.g. a proxied upstream body), and it leaves small bodies (under ~1 KiB) alone. A fork that wants compression off entirely can drop the `compress(...)` call and pass `r` straight to `http.Server.Handler`.
+
+Compression alone would otherwise open a truncation gap: if a handler announces a `Content-Length` and then writes fewer bytes than that — e.g. a proxied on-prem connection dropping mid-copy — `gzhttp` would still frame a syntactically complete, cleanly-closed compressed stream around the partial bytes, so the client would see a clean `200` instead of the broken connection an uncompressed response would have produced. `contentLengthGuard` sits between `compress` and Gin specifically to close that gap: it tracks the announced length against what was actually written and aborts the connection (`http.ErrAbortHandler`) if they don't match, so a truncated response fails the same way with or without compression.
 
 ## How it works under the hood
 

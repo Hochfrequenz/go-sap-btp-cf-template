@@ -1,0 +1,186 @@
+package main
+
+import (
+	"bytes"
+	"compress/gzip"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/gin-gonic/gin"
+)
+
+// server_test.go exercises newHTTPServer itself — the production wiring
+// main() installs — rather than compress() or contentLengthGuard() in
+// isolation (those have their own unit tests earlier in gzip_test.go).
+// Before newHTTPServer existed, nothing ran a request through the
+// *http.Server main() actually builds: gzip_test.go's httptest servers
+// called compress(...) directly, so a mutation to main's
+// Handler: compress(r) wiring itself, or to any of its four timeout
+// values, was invisible to the test suite. See PR #143 review.
+//
+// startTestServer wires an httptest.Server around the given *http.Server
+// (as newHTTPServer returns it) rather than letting httptest build its
+// own, so tests exercise the exact production Handler and timeouts.
+func startTestServer(t *testing.T, srv *http.Server) *httptest.Server {
+	t.Helper()
+	ts := httptest.NewUnstartedServer(nil)
+	ts.Config = srv
+	ts.Start()
+	t.Cleanup(ts.Close)
+	return ts
+}
+
+// ginEngineWrapping adapts a plain http.Handler into a *gin.Engine so it
+// can be passed to newHTTPServer, which (matching production's
+// buildRouter signature) takes *gin.Engine. It registers the handler as
+// a NoRoute fallback on an otherwise-empty engine, which is sufficient
+// here: each test using it only ever requests the one path it registers
+// on the wrapped mux.
+func ginEngineWrapping(h http.Handler) *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.NoRoute(func(c *gin.Context) {
+		h.ServeHTTP(c.Writer, c.Request)
+	})
+	return r
+}
+
+func noAutoDecompressHTTPClient(ts *httptest.Server) *http.Client {
+	c := *ts.Client()
+	tr := c.Transport.(*http.Transport).Clone()
+	tr.DisableCompression = true
+	c.Transport = tr
+	return &c
+}
+
+// Test_newHTTPServer_CompressesLargeResponses proves the real production
+// Handler (compress(contentLengthGuard(r)), as newHTTPServer wires it)
+// still gzip-compresses a large response end to end, not just that
+// compress() does when called directly against a hand-built
+// httptest.Server as gzip_test.go's tests do.
+func Test_newHTTPServer_CompressesLargeResponses(t *testing.T) {
+	big := []byte(strings.Repeat("a-fairly-long-value-for-compression-", 200))
+	mux := http.NewServeMux()
+	mux.HandleFunc("/big", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.Header().Set("Content-Length", strconv.Itoa(len(big)))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(big)
+	})
+
+	srv := newHTTPServer("0", ginEngineWrapping(mux))
+	ts := startTestServer(t, srv)
+	client := noAutoDecompressHTTPClient(ts)
+
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/big", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("do request: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if got := resp.Header.Get("Content-Encoding"); got != "gzip" {
+		t.Fatalf("Content-Encoding = %q, want gzip", got)
+	}
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	zr, err := gzip.NewReader(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatalf("gzip.NewReader: %v", err)
+	}
+	got, err := io.ReadAll(zr)
+	if err != nil {
+		t.Fatalf("gzip read: %v", err)
+	}
+	if !bytes.Equal(got, big) {
+		t.Fatalf("decompressed body mismatch: got %d bytes, want %d bytes", len(got), len(big))
+	}
+}
+
+// Test_newHTTPServer_PinnedTimeouts pins the four slow-client timeout
+// values documented on newHTTPServer's doc comment in main.go. A change
+// to any one of them is a deliberate, reviewable decision, not an
+// accidental refactor byproduct — this test is what would break if it
+// happened silently.
+func Test_newHTTPServer_PinnedTimeouts(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	r := buildRouter(func(c *gin.Context) { c.Next() }, fakeRouteCaller{}, fakeRouteMutator{}, logger)
+	srv := newHTTPServer("8080", r)
+
+	cases := []struct {
+		name string
+		got  time.Duration
+		want time.Duration
+	}{
+		{"ReadHeaderTimeout", srv.ReadHeaderTimeout, 10 * time.Second},
+		{"ReadTimeout", srv.ReadTimeout, 60 * time.Second},
+		{"WriteTimeout", srv.WriteTimeout, 900 * time.Second},
+		{"IdleTimeout", srv.IdleTimeout, 120 * time.Second},
+	}
+	for _, c := range cases {
+		if c.got != c.want {
+			t.Errorf("%s = %v, want %v", c.name, c.got, c.want)
+		}
+	}
+	if want := ":8080"; srv.Addr != want {
+		t.Errorf("Addr = %q, want %q", srv.Addr, want)
+	}
+}
+
+// Test_newHTTPServer_TruncatedHandler_AbortsInsteadOfCleanEOF wires the
+// exact production Handler (compress(contentLengthGuard(r))) and proves
+// the two compose the way the truncation fix intends: a handler that
+// announces Content-Length N but writes fewer bytes before returning
+// must NOT reach the client as a clean, fully-decodable compressed
+// response — the request must fail instead (a broken connection /
+// unexpected EOF), both with and without Accept-Encoding.
+func Test_newHTTPServer_TruncatedHandler_AbortsInsteadOfCleanEOF(t *testing.T) {
+	full := []byte(strings.Repeat("x", 4096))
+	half := full[:len(full)/2]
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/truncated", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.Header().Set("Content-Length", strconv.Itoa(len(full)))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(half)
+	})
+
+	for _, tc := range []struct {
+		name           string
+		acceptEncoding string
+	}{
+		{"with Accept-Encoding gzip", "gzip"},
+		{"without Accept-Encoding", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newHTTPServer("0", ginEngineWrapping(mux))
+			ts := startTestServer(t, srv)
+			client := noAutoDecompressHTTPClient(ts)
+
+			req, _ := http.NewRequest(http.MethodGet, ts.URL+"/truncated", nil)
+			if tc.acceptEncoding != "" {
+				req.Header.Set("Accept-Encoding", tc.acceptEncoding)
+			}
+			resp, err := client.Do(req)
+			if err != nil {
+				// The connection was aborted before headers/trailer
+				// completed — an acceptable failure shape too.
+				return
+			}
+			defer func() { _ = resp.Body.Close() }()
+			if _, err := io.ReadAll(resp.Body); err == nil {
+				t.Fatalf("expected a read error (truncated/aborted response), got a clean read")
+			}
+		})
+	}
+}

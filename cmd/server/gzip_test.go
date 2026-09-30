@@ -13,6 +13,8 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/klauspost/compress/gzhttp"
+	"github.com/klauspost/compress/zstd"
 )
 
 // gzip_test.go exercises the exact compress() wrapper cmd/server/main.go
@@ -38,9 +40,9 @@ var bigJSONBody = mustJSON(map[string]any{
 	"claims": strings.Repeat("a-fairly-long-claim-value-", 100),
 })
 
-// hugeJSONBody is a ~5 MB time-series-like JSON payload: repetitive enough
-// that gzip should shrink it a lot, but shaped like real telemetry rather
-// than one repeated byte.
+// hugeJSONBody is a ~3.4 MB time-series-like JSON payload: repetitive
+// enough that gzip should shrink it a lot, but shaped like real telemetry
+// rather than one repeated byte.
 var hugeJSONBody = mustHugeTimeSeriesJSON(60000)
 
 func mustJSON(v any) []byte {
@@ -117,7 +119,37 @@ func newMuxServer(t *testing.T) *httptest.Server {
 		_, _ = w.Write(gzipBytes(t, alreadyEncodedPlaintext))
 	})
 
+	// /ranged simulates a byte-range response: 206 + Content-Range, body
+	// well above MinSize. gzhttp must leave a response carrying
+	// Content-Range untouched — the bytes are already a slice of a larger
+	// representation, so compressing (or not) here has nothing to do with
+	// the client's Accept-Encoding and everything to do with not
+	// corrupting a byte-exact range.
+	mux.HandleFunc("/ranged", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes 0-%d/%d", len(bigJSONBody)-1, len(bigJSONBody)))
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = w.Write(bigJSONBody)
+	})
+
 	srv := httptest.NewServer(compress(mux))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// newMuxServerCompressEverything is newMuxServer but with gzhttp's MinSize
+// forced to 0, so every response — including ones below the default 1 KiB
+// threshold — is a candidate for compression. It exists solely to prove
+// that a route's already-small body (like Gin's plain-text 404) survives
+// being run through compress() with compression forced on, not just left
+// alone because it was too small to bother with.
+func newMuxServerCompressEverything(t *testing.T, r http.Handler) *httptest.Server {
+	t.Helper()
+	wrap, err := gzhttp.NewWrapper(gzhttp.MinSize(0))
+	if err != nil {
+		t.Fatalf("gzhttp.NewWrapper: %v", err)
+	}
+	srv := httptest.NewServer(wrap(r))
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -131,11 +163,12 @@ func newAppServer(t *testing.T) *httptest.Server {
 	return srv
 }
 
-// readBodyDecodingGzipIfNeeded reads the raw bytes off the wire (Go's
-// http.Transport does its OWN transparent gzip decoding when the request
-// did not set Accept-Encoding itself, which would hide the exact behaviour
-// under test) by disabling that via a Transport with DisableCompression,
-// then manually gunzips when Content-Encoding says gzip.
+// readRaw reads the raw wire bytes; callers use noAutoDecompressClient
+// (a Transport with DisableCompression set) so Go's http.Transport does
+// NOT do its own transparent gzip decoding, which would hide the exact
+// on-the-wire behaviour under test. Callers that need the decoded body
+// call gunzip (or the zstd equivalent) on the result themselves when
+// Content-Encoding says so.
 func readRaw(t *testing.T, resp *http.Response) []byte {
 	t.Helper()
 	raw, err := io.ReadAll(resp.Body)
@@ -239,9 +272,15 @@ func Test_Compress_GzipQZero_Uncompressed(t *testing.T) {
 }
 
 // Test_Compress_UnknownRoute_404Body is the regression test for the bug
-// that killed the earlier gin-level ginpingo.Gzip() approach: a gzipped
-// response for a route Gin doesn't recognise must still carry gin's real
-// 404 body, not an empty one.
+// that killed the earlier gin-level ginpingo.Gzip() approach: a response
+// for a route Gin doesn't recognise must still carry gin's real 404 body,
+// not an empty one. Gin's default 404 body ("404 page not found") is
+// well below gzhttp's 1 KiB MinSize, so even with Accept-Encoding: gzip
+// this particular response is left uncompressed (Content-Encoding is
+// empty) — the branch below handles both cases regardless, and
+// Test_Compress_UnknownRoute_404Body_ForcedCompression below re-runs the
+// same assertion with MinSize(0) to prove the body survives when
+// compression actually is applied to it.
 func Test_Compress_UnknownRoute_404Body(t *testing.T) {
 	srv := newAppServer(t)
 	client := noAutoDecompressClient(srv)
@@ -267,6 +306,39 @@ func Test_Compress_UnknownRoute_404Body(t *testing.T) {
 	}
 	if len(body) == 0 {
 		t.Fatalf("404 body is empty; want gin's real not-found body")
+	}
+}
+
+// Test_Compress_UnknownRoute_404Body_ForcedCompression is
+// Test_Compress_UnknownRoute_404Body's companion: it wraps buildRouter
+// with gzhttp.MinSize(0), so the small 404 body is actually compressed
+// this time (not merely eligible), and proves it still round-trips to
+// gin's real not-found body rather than an empty one.
+func Test_Compress_UnknownRoute_404Body_ForcedCompression(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	r := buildRouter(func(c *gin.Context) { c.Next() }, fakeRouteCaller{}, fakeRouteMutator{}, logger)
+	srv := newMuxServerCompressEverything(t, r)
+	client := noAutoDecompressClient(srv)
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/this-route-does-not-exist", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("do request: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Content-Encoding"); got != "gzip" {
+		t.Fatalf("Content-Encoding = %q, want gzip (MinSize(0) forces compression of this small body)", got)
+	}
+
+	raw := readRaw(t, resp)
+	body := gunzip(t, raw)
+	if len(body) == 0 {
+		t.Fatalf("404 body is empty after forced compression; want gin's real not-found body")
 	}
 }
 
@@ -377,5 +449,96 @@ func Test_Compress_SmallBody_NotCompressed(t *testing.T) {
 	defer func() { _ = resp2.Body.Close() }()
 	if got := resp2.Header.Get("Content-Encoding"); got != "" {
 		t.Fatalf("Content-Encoding = %q, want empty for a tiny body", got)
+	}
+}
+
+// Test_Compress_Zstd_NegotiatedWhenOffered covers gzhttp's zstd support,
+// kept on per the doc comment on compress() in main.go: a client whose
+// Accept-Encoding lists zstd alongside other encodings a browser would
+// realistically send gets zstd back, not gzip.
+func Test_Compress_Zstd_NegotiatedWhenOffered(t *testing.T) {
+	srv := newMuxServer(t)
+	client := noAutoDecompressClient(srv)
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/big", nil)
+	req.Header.Set("Accept-Encoding", "gzip, deflate, br, zstd")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("do request: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if got := resp.Header.Get("Content-Encoding"); got != "zstd" {
+		t.Fatalf("Content-Encoding = %q, want zstd", got)
+	}
+
+	raw := readRaw(t, resp)
+	zr, err := zstd.NewReader(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatalf("zstd.NewReader: %v", err)
+	}
+	defer zr.Close()
+	got, err := io.ReadAll(zr)
+	if err != nil {
+		t.Fatalf("zstd read: %v", err)
+	}
+	if !bytes.Equal(got, bigJSONBody) {
+		t.Fatalf("decompressed body mismatch: got %d bytes, want %d bytes", len(got), len(bigJSONBody))
+	}
+}
+
+// Test_Compress_HeadRequest_NoContentEncoding covers HEAD: gzhttp
+// disables compression for HEAD requests outright (there is no body to
+// compress), so Content-Encoding must be absent even though the same
+// route's GET response would be compressed.
+func Test_Compress_HeadRequest_NoContentEncoding(t *testing.T) {
+	srv := newMuxServer(t)
+	client := noAutoDecompressClient(srv)
+
+	req, _ := http.NewRequest(http.MethodHead, srv.URL+"/big", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("do request: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if got := resp.Header.Get("Content-Encoding"); got != "" {
+		t.Fatalf("Content-Encoding = %q, want empty for a HEAD response", got)
+	}
+	raw := readRaw(t, resp)
+	if len(raw) != 0 {
+		t.Fatalf("HEAD response body = %d bytes, want 0", len(raw))
+	}
+}
+
+// Test_Compress_PartialContent_PassedThroughIdentical covers a 206 +
+// Content-Range response (a byte-range reply): gzhttp must leave it
+// completely untouched — Content-Encoding must stay unset and the body
+// must reach the client byte-identical — because the bytes are already a
+// slice of a larger representation and re-encoding them would corrupt
+// the range's byte offsets.
+func Test_Compress_PartialContent_PassedThroughIdentical(t *testing.T) {
+	srv := newMuxServer(t)
+	client := noAutoDecompressClient(srv)
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/ranged", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("do request: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusPartialContent {
+		t.Fatalf("status = %d, want 206", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Content-Encoding"); got != "" {
+		t.Fatalf("Content-Encoding = %q, want empty (Content-Range responses are never compressed)", got)
+	}
+
+	raw := readRaw(t, resp)
+	if !bytes.Equal(raw, bigJSONBody) {
+		t.Fatalf("body mismatch: got %d bytes, want %d bytes identical to source", len(raw), len(bigJSONBody))
 	}
 }
