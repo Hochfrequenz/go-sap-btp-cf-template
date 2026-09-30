@@ -14,9 +14,10 @@ browser-facing front door in front of the Go backend.
   `GoBackend` destination declared in `manifest.yml` (`forwardAuthToken: true`).
 - Routes `/api/*`, `/healthz`, `/version` from `xs-app.json` to that destination. `/healthz` and
   `/version` are `authenticationType: "none"`; `/api/*` requires `authenticationType: "xsuaa"`.
-- `csrfProtection` defaults to `true` per route; `xs-app.json` currently sets it `false` on
-  `/api/*`. The backend's CSRF handling for on-prem writes is its outbound handshake with SAP and
-  is unrelated to this setting.
+- `csrfProtection` defaults to `true` per route and `xs-app.json` keeps that default on `/api/*`; a
+  browser write fetches a token with `GET /api/me` + `X-CSRF-Token: Fetch` first. The backend's
+  CSRF handling for on-prem writes is its outbound handshake with SAP and is unrelated to this
+  setting.
 
 ## It's optional
 

@@ -432,7 +432,13 @@ func buildRouter(authMW gin.HandlerFunc, caller btpingo.OnPremCaller, mutator bt
 	r.GET("/version", versionHandler())
 
 	api := r.Group("/api")
-	api.Use(authMW)
+	// requireJSONBody comes AFTER authMW, not before: an unauthenticated or
+	// invalidly-authenticated caller gets the usual 401 first rather than a
+	// 415 that discloses the group's payload requirements before auth has
+	// even run. It also keeps GET-only reads (e.g. the huma-generated docs
+	// and spec routes registered below) untouched, since the middleware
+	// exempts GET/HEAD/OPTIONS outright.
+	api.Use(authMW, requireJSONBody())
 	api.GET("/me", func(c *gin.Context) {
 		claims, _ := c.Get(ginpingo.ClaimsContextKey)
 		c.JSON(http.StatusOK, gin.H{"claims": claims})
