@@ -195,7 +195,6 @@ func transformGoMod(old []byte, cfg *Config) ([]byte, error) {
 	if !re.Match(old) {
 		return nil, errors.New("go.mod: no `module <path>` line")
 	}
-
 	return re.ReplaceAll(old, []byte("module "+cfg.App.Module)), nil
 }
 
@@ -204,8 +203,14 @@ func transformServerMainGo(old []byte, cfg *Config) ([]byte, error) {
 	if !re.Match(old) {
 		return nil, errors.New("cmd/server/main.go: no huma.DefaultConfig call")
 	}
+	// ReplaceAllLiteral, not ReplaceAll: cfg.App.Title / cfg.App.Version
+	// are operator-supplied data, not a replacement template. ReplaceAll
+	// interprets `$1`, `$name` etc. in the replacement as backreferences;
+	// a title like "Cost ${x} $1 API" would silently corrupt into
+	// whatever ${x}/$1 expand to (empty string, for a non-existent
+	// group). ReplaceAllLiteral treats the replacement bytes as-is.
 	replacement := []byte(fmt.Sprintf(`huma.DefaultConfig(%q, %q)`, cfg.App.Title, cfg.App.Version))
-	return re.ReplaceAll(old, replacement), nil
+	return re.ReplaceAllLiteral(old, replacement), nil
 }
 
 // transformManifestYml rewrites the `services:` bindings in both the

@@ -34,7 +34,6 @@ func testConfig() *Config {
 			Domain: "cfapps.us10.hana.ondemand.com",
 		},
 	}
-
 	return cfg
 }
 
@@ -50,6 +49,23 @@ func Test_transformServerMainGo_IsIdempotent(t *testing.T) {
 	out, err := transformServerMainGo(in, testConfig())
 	then.AssertThat(t, err, is.Nil())
 	then.AssertThat(t, string(out), is.EqualTo(string(in)))
+}
+
+// Test_transformServerMainGo_DollarIsLiteral pins a real regression:
+// regexp.ReplaceAll treats `$` in the REPLACEMENT as a backreference
+// (`$1`, `$name`, ...), and cfg.App.Title is operator-supplied data,
+// not a replacement template. A title containing `$` — e.g. an app
+// that charges in a currency and says so in its OpenAPI title — must
+// survive byte-for-byte. This fails under regexp.ReplaceAll (`$1`
+// expands to the capture group, `${x}` to empty since there's no such
+// named group) and passes under regexp.ReplaceAllLiteral.
+func Test_transformServerMainGo_DollarIsLiteral(t *testing.T) {
+	cfg := testConfig()
+	cfg.App.Title = "Cost ${x} $1 API"
+	in := []byte(`cfg := huma.DefaultConfig("Go SAP BTP CF Template", "0.1")`)
+	out, err := transformServerMainGo(in, cfg)
+	then.AssertThat(t, err, is.Nil())
+	then.AssertThat(t, string(out), is.EqualTo(`cfg := huma.DefaultConfig("Cost ${x} $1 API", "2.3")`))
 }
 
 func Test_transformGoMod_ReplacesModuleLine(t *testing.T) {

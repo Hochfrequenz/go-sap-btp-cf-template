@@ -263,6 +263,13 @@ func buildRouter(authMW gin.HandlerFunc, caller btpingo.OnPremCaller, mutator bt
 
 func openAPIConfig() huma.Config {
 	cfg := huma.DefaultConfig("Go SAP BTP CF Template", "0.1")
+	// huma.NewWithGroup mounts operations at their path relative to the
+	// "api" group ("/adt-discovery", not "/api/adt-discovery"), and
+	// without an explicit server the spec has no `servers` entry to say
+	// otherwise. A generated client, or the docs page's "Try it" button,
+	// would then call the un-prefixed path and 404. Declaring the
+	// relative server URL "/api" fixes both.
+	cfg.Servers = []*huma.Server{{URL: "/api"}}
 	cfg.Components.SecuritySchemes = map[string]*huma.SecurityScheme{
 		"bearerAuth": {Type: "http", Scheme: "bearer", BearerFormat: "JWT"},
 	}

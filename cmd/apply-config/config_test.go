@@ -37,7 +37,8 @@ cf:
 	then.AssertThat(t, err, is.Nil())
 	then.AssertThat(t, cfg.App.Name, is.EqualTo("my-app"))
 	then.AssertThat(t, cfg.Services.XSUAA, is.EqualTo("my-xsuaa"))
-	then.AssertThat(t, cfg.App.Title, is.EqualTo("Go SAP BTP CF Template"))
+	// Title defaults to app.name (not a fixed template string) when left blank.
+	then.AssertThat(t, cfg.App.Title, is.EqualTo("my-app"))
 	then.AssertThat(t, cfg.App.Version, is.EqualTo("0.0.0"))
 }
 

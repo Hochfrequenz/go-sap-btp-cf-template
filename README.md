@@ -420,10 +420,10 @@ This means no frickling with neither easy-to-get-wrong endpoint annotations nor 
 | `/api/schemas/*`        | Referenced JSON Schemas                            |
 
 These sit under `/api`, so the JWT middleware applies — the spec describes a JWT-gated API; reading it requires the same auth.
-Forks that want public docs can move the huma mount to the engine root in `cmd/server/main.go`'s `buildRouter`.
+Forks that want public docs can move the huma mount to the engine root in `cmd/server/main.go`'s `buildRouter`. If you do, also drop `cfg.Security` from `openAPIConfig()` — the global `bearerAuth` security requirement documents (and only documents) what the `api` group's JWT middleware already enforces; mounted at the root instead, those routes are public, and a spec still claiming a global bearer-auth requirement would be wrong.
 
 The spec's `components.securitySchemes` declares a global `bearerAuth` scheme (`type: http`, `scheme: bearer`, `bearerFormat: JWT`), set in `openAPIConfig()` (`cmd/server/main.go`) — it documents the JWT the `api` group's middleware already enforces, so a generated client knows to send `Authorization: Bearer <token>` and the Stoplight Elements page offers a place to paste one.
-The title and version shown at `/api/docs` and in the spec come from `app.title` / `app.version` in `config.yml`, rewritten into `cmd/server/main.go`'s `huma.DefaultConfig(...)` call by `apply-config` — see [Using this repo as a template](#using-this-repo-as-a-template).
+The title and version shown at `/api/docs` and in the spec come from `app.title` / `app.version` in `config.yml` (title falls back to `app.name` when left blank), rewritten into `cmd/server/main.go`'s `huma.DefaultConfig(...)` call by `apply-config` — see [Using this repo as a template](#using-this-repo-as-a-template).
 
 A huma-style handler looks like this.
 `examples/adtdiscovery/handler.go` is the canonical example in this repo:

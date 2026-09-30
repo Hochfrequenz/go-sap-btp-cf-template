@@ -38,7 +38,6 @@ func Test_logLevelFromEnv_MapsKnownAndUnknown(t *testing.T) {
 		{"trace", slog.LevelInfo},    // unknown → INFO
 		{"nonsense", slog.LevelInfo}, // unknown → INFO
 	}
-
 	for _, c := range cases {
 		t.Setenv("LOG_LEVEL", c.in)
 		got := logLevelFromEnv()
