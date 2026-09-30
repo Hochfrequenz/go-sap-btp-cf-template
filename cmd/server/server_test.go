@@ -17,7 +17,7 @@ import (
 
 // server_test.go exercises newHTTPServer itself — the production wiring
 // main() installs — rather than compress() or contentLengthGuard() in
-// isolation (those have their own unit tests earlier in gzip_test.go).
+// isolation (those have their own unit tests in gzip_test.go and clguard_test.go).
 // Before newHTTPServer existed, nothing ran a request through the
 // *http.Server main() actually builds: gzip_test.go's httptest servers
 // called compress(...) directly, so a mutation to main's
@@ -182,5 +182,70 @@ func Test_newHTTPServer_TruncatedHandler_AbortsInsteadOfCleanEOF(t *testing.T) {
 				t.Fatalf("expected a read error (truncated/aborted response), got a clean read")
 			}
 		})
+	}
+}
+
+// Test_newHTTPServer_GinStreamAndHijack_Work pins the two gin features
+// that reach the writer below gin through UNCHECKED type assertions:
+// c.Stream (CloseNotify) and c.Writer.Hijack (websocket upgrades). Both
+// must work through the production wiring with and without
+// Accept-Encoding (gzhttp picks a different writer for each).
+func Test_newHTTPServer_GinStreamAndHijack_Work(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.GET("/stream", func(c *gin.Context) {
+		n := 0
+		c.Stream(func(w io.Writer) bool {
+			_, _ = io.WriteString(w, "data: x\n\n")
+			n++
+			return n < 3
+		})
+	})
+	r.GET("/hijack", func(c *gin.Context) {
+		conn, bw, err := c.Writer.Hijack()
+		if err != nil {
+			c.String(http.StatusInternalServerError, "hijack: %v", err)
+			return
+		}
+		_, _ = bw.WriteString("HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\nhijacked")
+		_ = bw.Flush()
+		_ = conn.Close()
+	})
+	ts := startTestServer(t, newHTTPServer("0", r))
+
+	for _, ae := range []string{"", "gzip"} {
+		for path, want := range map[string]string{
+			"/stream": "data: x\n\ndata: x\n\ndata: x\n\n",
+			"/hijack": "hijacked",
+		} {
+			t.Run(path+" Accept-Encoding="+ae, func(t *testing.T) {
+				req, _ := http.NewRequest(http.MethodGet, ts.URL+path, nil)
+				if ae != "" {
+					req.Header.Set("Accept-Encoding", ae)
+				}
+				// ts.Client() decodes gzip transparently only when it set
+				// Accept-Encoding itself, so decode by hand when needed.
+				resp, err := noAutoDecompressHTTPClient(ts).Do(req)
+				if err != nil {
+					t.Fatalf("do request: %v", err)
+				}
+				defer func() { _ = resp.Body.Close() }()
+				var body io.Reader = resp.Body
+				if resp.Header.Get("Content-Encoding") == "gzip" {
+					zr, err := gzip.NewReader(resp.Body)
+					if err != nil {
+						t.Fatalf("gzip.NewReader: %v", err)
+					}
+					body = zr
+				}
+				got, err := io.ReadAll(body)
+				if err != nil {
+					t.Fatalf("read body: %v", err)
+				}
+				if resp.StatusCode != http.StatusOK || string(got) != want {
+					t.Fatalf("got %d %q, want 200 %q", resp.StatusCode, got, want)
+				}
+			})
+		}
 	}
 }

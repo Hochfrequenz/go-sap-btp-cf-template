@@ -5,11 +5,13 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -192,9 +194,13 @@ func compress(h http.Handler) http.Handler {
 // want" is expected and not a truncation.
 func contentLengthGuard(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		g := &clGuardWriter{ResponseWriter: w, want: -1}
+		g := &clGuardWriter{ResponseWriter: w, want: -1, ctx: r.Context()}
 		h.ServeHTTP(g, r)
 		if r.Method != http.MethodHead && g.want >= 0 && g.written < g.want {
+			// net/http logs nothing for ErrAbortHandler and the access log
+			// still says 200, so this line is the operator's only signal.
+			slog.ErrorContext(r.Context(), "response shorter than its Content-Length; aborting connection",
+				"method", r.Method, "path", r.URL.Path, "content_length", g.want, "written", g.written)
 			panic(http.ErrAbortHandler) // no terminating chunk -> client sees EOF, as without compression
 		}
 	})
@@ -210,6 +216,7 @@ type clGuardWriter struct {
 	http.ResponseWriter
 	want, written int64
 	wroteHeader   bool
+	ctx           context.Context
 }
 
 // WriteHeader latches only on the FIRST call that actually finalizes the
@@ -250,6 +257,28 @@ func (w *clGuardWriter) Flush() {
 }
 
 func (w *clGuardWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+// Hijack and CloseNotify exist because gin calls both through UNCHECKED
+// type assertions on the writer it wraps (gin v1.12.0 response_writer.go):
+// without them c.Writer.Hijack() (websocket upgrades) and c.Stream()
+// (which calls CloseNotify) panic with "interface conversion".
+func (w *clGuardWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return http.NewResponseController(w.ResponseWriter).Hijack()
+}
+
+// CloseNotify is derived from the request context rather than delegated:
+// gzhttp's pass-through writer (used when the client sent no
+// Accept-Encoding) does not implement http.CloseNotifier either. The
+// context is cancelled on client disconnect and when ServeHTTP returns,
+// so the goroutine cannot outlive the request.
+func (w *clGuardWriter) CloseNotify() <-chan bool {
+	ch := make(chan bool, 1)
+	go func() {
+		<-w.ctx.Done()
+		ch <- true
+	}()
+	return ch
+}
 
 // newHTTPServer builds the *http.Server production wiring: the given
 // *gin.Engine wrapped with response compression (compress) and the

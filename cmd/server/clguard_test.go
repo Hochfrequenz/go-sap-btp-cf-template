@@ -45,21 +45,6 @@ func doThroughGuard(t *testing.T, h http.HandlerFunc, method string) (*http.Resp
 	return resp, body, err
 }
 
-func Test_contentLengthGuard_TruncatedWrite_Aborts(t *testing.T) {
-	full := strings.Repeat("y", 200)
-	half := full[:len(full)/2]
-	h := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Length", strconv.Itoa(len(full)))
-		w.WriteHeader(http.StatusOK)
-		_, _ = io.WriteString(w, half)
-	})
-
-	_, _, err := doThroughGuard(t, h, http.MethodGet)
-	if err == nil {
-		t.Fatal("expected a request/read error for a truncated write, got none")
-	}
-}
-
 func Test_contentLengthGuard_FullWrite_Passes(t *testing.T) {
 	full := strings.Repeat("z", 200)
 	h := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -211,5 +196,71 @@ func Test_contentLengthGuard_FlushSSE_Unaffected(t *testing.T) {
 	}
 	if chunks != 3 {
 		t.Fatalf("got %d SSE chunks, want 3", chunks)
+	}
+}
+
+// guardAborts runs h through contentLengthGuard alone and reports whether
+// the guard raised http.ErrAbortHandler. The httptest.Server-based tests
+// above cannot tell: without gzhttp in front, net/http enforces
+// Content-Length itself and breaks the connection even with no guard at
+// all, so they pass with the guard deleted.
+func guardAborts(t *testing.T, h http.Handler, method string) (aborted bool) {
+	t.Helper()
+	defer func() {
+		if rec := recover(); rec != nil {
+			if rec != http.ErrAbortHandler {
+				panic(rec)
+			}
+			aborted = true
+		}
+	}()
+	contentLengthGuard(h).ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(method, "/", nil))
+	return false
+}
+
+func Test_contentLengthGuard_AbortDecision(t *testing.T) {
+	cases := []struct {
+		name   string
+		method string
+		h      http.HandlerFunc
+		want   bool
+	}{
+		{"explicit 200, short", http.MethodGet, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Length", "200")
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w, strings.Repeat("y", 100))
+		}, true},
+		{"implicit 200, short", http.MethodGet, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Length", "200")
+			_, _ = io.WriteString(w, strings.Repeat("y", 100))
+		}, true},
+		{"short after 103", http.MethodGet, func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusEarlyHints)
+			w.Header().Set("Content-Length", "50")
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w, strings.Repeat("q", 25))
+		}, true},
+		{"full write", http.MethodGet, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Length", "3")
+			_, _ = io.WriteString(w, "abc")
+		}, false},
+		{"no Content-Length", http.MethodGet, func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = io.WriteString(w, "abc")
+		}, false},
+		{"304 with Content-Length", http.MethodGet, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Length", "12345")
+			w.WriteHeader(http.StatusNotModified)
+		}, false},
+		{"HEAD with Content-Length", http.MethodHead, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Length", "999")
+			w.WriteHeader(http.StatusOK)
+		}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := guardAborts(t, c.h, c.method); got != c.want {
+				t.Fatalf("aborted = %v, want %v", got, c.want)
+			}
+		})
 	}
 }
