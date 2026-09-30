@@ -1024,6 +1024,7 @@ XSUAA client-credentials tokens are cached with a 30 s refresh leeway and collap
 ## References
 
 - [ABAP backend playbook](docs/abap-backend-playbook.md) — if the on-premise side is your own ABAP HTTP API: the conventions both halves share, SAP pitfalls, and copyable ABAP code
+- [Data-heavy APIs](docs/data-heavy-apis.md) — response-size cap, streaming vs. buffering, timeouts, compression, and paging for endpoints that return a lot of data (e.g. time series)
 - [SAP BTP Connectivity & Destination (Help Portal)](https://help.sap.com/docs/connectivity/sap-btp-connectivity-cf)
 - [SAP Cloud Connector install guide](https://help.sap.com/docs/connectivity/sap-btp-connectivity-cf/installation)
 - [Destination service REST API](https://help.sap.com/docs/connectivity/sap-btp-connectivity-cf/destinations-destination-service-rest-api) — `/destination-configuration/v1/destinations/{name}` is the generic lookup this MWE uses
