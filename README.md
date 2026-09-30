@@ -73,9 +73,9 @@ turn it off — but nothing about the backend requires it, and a fork is free to
 - The XSUAA OAuth auth-code login flow and a session cookie (`JSESSIONID`), so a signed-in browser
   user does not have to handle tokens itself.
 - CSRF protection (`X-CSRF-Token`) for session-cookie requests — the approuter's per-route default.
-  `web/xs-app.json` currently sets `csrfProtection: false` on `/api/*`. (The handshake in
-  ["Calling SAP with a POST / CSRF"](#calling-sap-with-a-post--csrf) is the backend's _outbound_
-  call to SAP and is unrelated to this setting.)
+  `web/xs-app.json` leaves it at that default on `/api/*` (see [JSON-only writes](#json-only-writes)).
+  (The handshake in ["Calling SAP with a POST / CSRF"](#calling-sap-with-a-post--csrf) is the
+  backend's _outbound_ call to SAP and is unrelated to this setting.)
 - Forwarding of the resulting JWT to the Go backend as `Authorization: Bearer <jwt>`, via the
   `forwardAuthToken: true` destination in `manifest.yml`.
 
@@ -87,6 +87,7 @@ turn it off — but nothing about the backend requires it, and a fork is free to
   checks signature, audience and expiry (`btpingo`'s `auth.go`) the same way either way.
 - Such a token carries no user: `user_name`/`email` claims are absent, Principal Propagation has no
   user JWT to forward, and `/api/docs` can no longer be opened in a browser.
+- Writes must still send `Content-Type: application/json` (`requireJSONBody`).
 
 **To remove it:**
 
@@ -350,7 +351,7 @@ To genuinely lift the cap on one route, structure that route under its own route
 
 #### JSON-only writes
 
-`cmd/server/main.go`'s `requireJSONBody` middleware sits on the `api` group, after `authMW`. A `POST`, and any `PUT`/`PATCH`/`DELETE` that carries a body, is rejected with a typed `415` (`code: "invalid_request"`) unless its media type is `application/json` or `application/*+json`; parameters such as `charset` are ignored, and a missing `Content-Type` is rejected. `GET`/`HEAD`/`OPTIONS` and bodyless `PUT`/`PATCH`/`DELETE` pass through. A route that must accept another format (for example a fork's `ginpingo.ProxyHandler` forwarding XML) goes on a sibling group without the middleware: `raw := r.Group("/api", authMW)`. On the approuter side, `web/xs-app.json`'s `^/api/(.*)$` route leaves CSRF protection at its default (on): a browser session writing through the approuter first fetches a token with `GET /api/me` and `X-CSRF-Token: Fetch`, then sends it as `X-CSRF-Token`. Requests carrying `x-approuter-authorization`, and callers of the backend's own route, are not subject to that check.
+`cmd/server/main.go`'s `requireJSONBody` middleware sits on the `api` group, after `authMW`. A `POST`, and any `PUT`/`PATCH`/`DELETE` that carries a body, is rejected with a typed `415` (`code: "invalid_request"`) unless its media type is `application/json` or `application/*+json`; parameters such as `charset` are ignored, and a missing `Content-Type` is rejected. `GET`/`HEAD`/`OPTIONS` and bodyless `PUT`/`PATCH`/`DELETE` pass through. A route that must accept another format (for example a fork's `ginpingo.ProxyHandler` forwarding XML) goes on a sibling group without the middleware: `raw := r.Group("/api", authMW)`. On the approuter side (see ["Do you need the approuter?"](#do-you-need-the-approuter)), `web/xs-app.json`'s `^/api/(.*)$` route leaves CSRF protection at its default (on): a browser session writing through the approuter first fetches a token with `GET /api/me` and `X-CSRF-Token: Fetch`, then sends it as `X-CSRF-Token`. Requests carrying `x-approuter-authorization`, and callers of the backend's own route, are not subject to that check.
 
 ---
 
