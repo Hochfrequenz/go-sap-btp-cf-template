@@ -79,8 +79,8 @@ library-intent surface is documented at [pkg.go.dev/github.com/hochfrequenz/btpi
 
 ## Using this repo as a template
 
-All per-deployment string values (app name, Go module path, CF subaccount coordinates, service instance names, **example-handler destination name**) live in a single [`config.yml`](config.yml) at the repo root.
-`cmd/apply-config` is a small Go tool that reads that file, type-checks every field, and rewrites the rest of the tree from it - `go.mod`, every Go import, `manifest.yml`, `xs-security.json`, `vars.example.yml`, `web/package.json`, `.github/workflows/deploy.yml`, and the destination-name literal across `examples/**/*.go`.
+All per-deployment string values (app name, Go module path, CF subaccount coordinates, service instance names, **OpenAPI title/version**, **example-handler destination name**) live in a single [`config.yml`](config.yml) at the repo root.
+`cmd/apply-config` is a small Go tool that reads that file, type-checks every field, and rewrites the rest of the tree from it - `go.mod`, every Go import, `manifest.yml`, `xs-security.json`, `vars.example.yml`, `web/package.json`, `.github/workflows/deploy.yml`, the `huma.DefaultConfig(...)` title/version call in `cmd/server/main.go`, and the destination-name literal across `examples/**/*.go`.
 
 > **Using AI assistance to navigate this template?** Start with [`CLAUDE.md`](CLAUDE.md) at the repo root - rules + pointers an AI assistant reads on every prompt to stay on-rails (handler placement, forbidden patterns, where things live). The README stays the human-facing reference; `CLAUDE.md` is its AI-facing companion.
 
@@ -406,9 +406,9 @@ Local debugging: set `LOG_LEVEL=debug` before running the server to see `DEBUG`-
 
 ---
 
-### OpenAPI 3.1 + Swagger UI via huma
+### OpenAPI 3.1 + interactive docs via huma
 
-The router mounts a [huma v2](https://huma.rocks/) API on top of the same `api` group, so every handler registered through huma appears in an auto-generated OpenAPI 3.1 spec - and a Swagger UI rendered from it - with **no comments, no annotations, no manual spec to maintain**.
+The router mounts a [huma v2](https://huma.rocks/) API on top of the same `api` group, so every handler registered through huma appears in an auto-generated OpenAPI 3.1 spec - and Stoplight Elements rendered from it - with **no comments, no annotations, no manual spec to maintain**.
 This means no frickling with neither easy-to-get-wrong endpoint annotations nor badly auto-generated code from mediocre API first / code generation tools.
 
 | Path                    | Served                                             |
@@ -416,11 +416,14 @@ This means no frickling with neither easy-to-get-wrong endpoint annotations nor 
 | `/api/openapi.json`     | OpenAPI 3.1 (JSON)                                 |
 | `/api/openapi.yaml`     | Same, YAML                                         |
 | `/api/openapi-3.0.json` | OpenAPI 3.0.3 (for tools that don't speak 3.1 yet) |
-| `/api/docs`             | Swagger UI                                         |
+| `/api/docs`             | Stoplight Elements                                 |
 | `/api/schemas/*`        | Referenced JSON Schemas                            |
 
 These sit under `/api`, so the JWT middleware applies — the spec describes a JWT-gated API; reading it requires the same auth.
-Forks that want public docs can move the huma mount to the engine root in `cmd/server/main.go`'s `buildRouter`.
+Moving the huma mount to the engine root in `cmd/server/main.go`'s `buildRouter` makes **every huma operation public**, not only the docs: `adtdiscovery` and anything else registered on `hapi` would leave the `api` group's JWT middleware, SAP-backed calls included. Do it only if all huma operations are meant to be public. If you do, also drop `cfg.Security` and `cfg.Servers` from `openAPIConfig()`: `bearerAuth` would claim a JWT nothing enforces any more, and the `/api` server entry would point generated clients, "Try it" and the docs page's own spec URL (huma prefixes it with the server path) at `/api/...`, which no longer exists.
+
+The spec's `components.securitySchemes` declares a global `bearerAuth` scheme (`type: http`, `scheme: bearer`, `bearerFormat: JWT`), set in `openAPIConfig()` (`cmd/server/main.go`) — it documents the JWT the `api` group's middleware already enforces, so a generated client knows to send `Authorization: Bearer <token>` and the Stoplight Elements page offers a place to paste one.
+The title and version shown at `/api/docs` and in the spec come from `app.title` / `app.version` in `config.yml` (title falls back to `app.name` when left blank), rewritten into `cmd/server/main.go`'s `huma.DefaultConfig(...)` call by `apply-config` — see [Using this repo as a template](#using-this-repo-as-a-template).
 
 A huma-style handler looks like this.
 `examples/adtdiscovery/handler.go` is the canonical example in this repo:
@@ -455,7 +458,7 @@ Both can coexist on the same router group; pick one per handler — never mix th
 
 | Need                                                                                                                | Pick              | Why                                                                                                                   |
 | ------------------------------------------------------------------------------------------------------------------- | ----------------- | --------------------------------------------------------------------------------------------------------------------- |
-| Read-only (GET) and you want OpenAPI 3.1 / Swagger UI coverage                                                      | **huma**          | The route auto-appears in `/openapi.json`; no manual spec wiring.                                                     |
+| Read-only (GET) and you want OpenAPI 3.1 / interactive docs coverage                                                | **huma**          | The route auto-appears in `/openapi.json`; no manual spec wiring.                                                     |
 | Mutating (POST / PUT / DELETE / PATCH) and you need `user_name` (or any other claim) from the JWT for audit logging | **gin**           | `c.MustGet(ginpingo.ClaimsContextKey)` is on the hot path; `ginpingo.AbortError` carries the typed envelope.          |
 | Mutating without claim access                                                                                       | **gin** (default) | Same envelope shape as the rest of the typed-error story; consistent with the two existing mutating examples.         |
 | Tied — could go either way                                                                                          | **gin**           | Matches more existing examples (2 of 3); easier for fork-authors to consistency-check against the canonical patterns. |

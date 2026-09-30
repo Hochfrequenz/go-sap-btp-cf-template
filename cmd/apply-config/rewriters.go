@@ -114,20 +114,37 @@ func Run(root string, cfg *Config, dryRun bool) (*Result, error) {
 		res.Rewriters = append(res.Rewriters, rr)
 	}
 
+	// The walkers below (planGoImports, planExamplesDestination) read
+	// every *.go file straight off disk, independently of the phase-1
+	// rewrites above. cmd/server/main.go is now touched by both a
+	// singleFileRewriters entry (transformServerMainGo, OpenAPI title/
+	// version) and planGoImports (import-path rewrite) — without
+	// threading the already-planned content through, planGoImports
+	// would plan its "After" from the *pre-rewrite* file, and Phase 2
+	// (which writes plan entries in order) would then silently discard
+	// the title/version change when it writes planGoImports' entry
+	// afterwards. overrides carries every phase-1 "After" forward so
+	// later walkers build on top of it instead of reverting it.
+	overrides := make(map[string][]byte, len(plan))
+	for _, p := range plan {
+		overrides[p.absPath] = p.result.After
+	}
+
 	// Walk the tree for *.go files — this isn't a single path, it's
 	// a glob, so it lives outside singleFileRewriters().
-	goPlan, err := planGoImports(root, oldModule, cfg)
+	goPlan, err := planGoImports(root, oldModule, cfg, overrides)
 	if err != nil {
 		return nil, err
 	}
 	for _, p := range goPlan {
 		plan = append(plan, p)
 		res.Rewriters = append(res.Rewriters, p.result)
+		overrides[p.absPath] = p.result.After
 	}
 
 	// Walk examples/ for the destination-name literal. Same plan-not-
 	// write contract as planGoImports — Phase-2 atomicity preserved.
-	examplesPlan, err := planExamplesDestination(root, cfg)
+	examplesPlan, err := planExamplesDestination(root, cfg, overrides)
 	if err != nil {
 		return nil, err
 	}
@@ -164,6 +181,7 @@ func singleFileRewriters() []Rewriter {
 		{Name: "vars.example.yml", Path: "vars.example.yml", Transform: transformVarsExampleYml},
 		{Name: "web/package.json", Path: "web/package.json", Transform: transformPackageJson},
 		{Name: ".github/workflows/deploy.yml", Path: ".github/workflows/deploy.yml", Transform: transformDeployYml},
+		{Name: "cmd/server/main.go", Path: "cmd/server/main.go", Transform: transformServerMainGo},
 	}
 }
 
@@ -178,6 +196,21 @@ func transformGoMod(old []byte, cfg *Config) ([]byte, error) {
 		return nil, errors.New("go.mod: no `module <path>` line")
 	}
 	return re.ReplaceAll(old, []byte("module "+cfg.App.Module)), nil
+}
+
+func transformServerMainGo(old []byte, cfg *Config) ([]byte, error) {
+	re := regexp.MustCompile(`huma\.DefaultConfig\("(?:\\.|[^"\\])*",\s*"(?:\\.|[^"\\])*"\)`)
+	if !re.Match(old) {
+		return nil, errors.New("cmd/server/main.go: no huma.DefaultConfig call")
+	}
+	// ReplaceAllLiteral, not ReplaceAll: cfg.App.Title / cfg.App.Version
+	// are operator-supplied data, not a replacement template. ReplaceAll
+	// interprets `$1`, `$name` etc. in the replacement as backreferences;
+	// a title like "Cost ${x} $1 API" would silently corrupt into
+	// whatever ${x}/$1 expand to (empty string, for a non-existent
+	// group). ReplaceAllLiteral treats the replacement bytes as-is.
+	replacement := []byte(fmt.Sprintf(`huma.DefaultConfig(%q, %q)`, cfg.App.Title, cfg.App.Version))
+	return re.ReplaceAllLiteral(old, replacement), nil
 }
 
 // transformManifestYml rewrites the `services:` bindings in both the
@@ -321,6 +354,16 @@ func transformDeployYml(old []byte, cfg *Config) ([]byte, error) {
 	return result, nil
 }
 
+// readWithOverride returns overrides[path] if present, else reads path
+// from disk. Used by the tree-walking rewriters so they build on any
+// content already staged by an earlier phase instead of reverting it.
+func readWithOverride(path string, overrides map[string][]byte) ([]byte, error) {
+	if content, ok := overrides[path]; ok {
+		return content, nil
+	}
+	return os.ReadFile(path)
+}
+
 // --- Go imports walker --------------------------------------------------
 
 // planGoImports finds every *.go file under root, applies the quoted
@@ -329,7 +372,11 @@ func transformDeployYml(old []byte, cfg *Config) ([]byte, error) {
 // returns a plan of per-file rewrites. No files are written — callers
 // (Run) decide whether to commit the plan, so a failure elsewhere cannot
 // leave the tree half-applied.
-func planGoImports(root, oldModule string, cfg *Config) ([]pending, error) {
+//
+// overrides lets an earlier phase's already-planned content stand in for
+// the on-disk file (keyed by absolute path) — see Run's comment on why
+// this matters for files touched by more than one rewriter.
+func planGoImports(root, oldModule string, cfg *Config, overrides map[string][]byte) ([]pending, error) {
 	re := regexp.MustCompile(`"` + regexp.QuoteMeta(oldModule) + `([/"])`)
 	replacement := []byte(`"` + cfg.App.Module + `$1`)
 
@@ -348,7 +395,7 @@ func planGoImports(root, oldModule string, cfg *Config) ([]pending, error) {
 		if !strings.HasSuffix(p, ".go") {
 			return nil
 		}
-		old, err := os.ReadFile(p)
+		old, err := readWithOverride(p, overrides)
 		if err != nil {
 			return err
 		}
@@ -387,7 +434,7 @@ func planGoImports(root, oldModule string, cfg *Config) ([]pending, error) {
 //     returns empty plan, no error — there's nothing for the rewriter to do.
 //   - current literal already matches `cfg.Examples.DestinationName`:
 //     plan still includes every file (Before == After), Run skips the writes.
-func planExamplesDestination(root string, cfg *Config) ([]pending, error) {
+func planExamplesDestination(root string, cfg *Config, overrides map[string][]byte) ([]pending, error) {
 	examplesDir := filepath.Join(root, "examples")
 	info, err := os.Stat(examplesDir)
 	if err != nil {
@@ -425,7 +472,7 @@ func planExamplesDestination(root string, cfg *Config) ([]pending, error) {
 		if !strings.HasSuffix(p, ".go") {
 			return nil
 		}
-		old, readErr := os.ReadFile(p)
+		old, readErr := readWithOverride(p, overrides)
 		if readErr != nil {
 			return readErr
 		}

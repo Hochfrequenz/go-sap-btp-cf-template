@@ -88,6 +88,11 @@ jobs:
           grep -q -- '- smoke-cc'    manifest.yml
           # xs-security.json must carry the new xsappname.
           grep -q '"xsappname": "smoke-test-app"' xs-security.json
+          # cmd/server/main.go must carry the rewritten OpenAPI title/
+          # version call. The fixture config.yml above sets neither
+          # app.title nor app.version, so title falls back to app.name
+          # ("smoke-test-app") and version falls back to "0.0.0".
+          grep -q 'huma.DefaultConfig("smoke-test-app", "0.0.0")' cmd/server/main.go
           # The old module path must NOT appear in any Go source in the
           # rewritten tree (outside cmd/apply-config which holds the
           # rewriter's internals and legitimately carries the original

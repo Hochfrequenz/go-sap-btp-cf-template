@@ -44,6 +44,10 @@ type AppConfig struct {
 	// Module is the Go module path — exactly what ends up in go.mod
 	// and in every Go import statement.
 	Module string `yaml:"module"`
+	// Title and Version identify the generated OpenAPI document.
+	// Title defaults to Name when left blank — see applyDefaults.
+	Title   string `yaml:"title"`
+	Version string `yaml:"version"`
 }
 
 // ServicesConfig names the three CF service instances the backend
@@ -95,6 +99,11 @@ func LoadConfig(path string) (*Config, error) {
 func (c *Config) applyDefaults() {
 	c.App.Name = strings.TrimSpace(c.App.Name)
 	c.App.Module = strings.TrimSpace(c.App.Module)
+	c.App.Title = strings.TrimSpace(c.App.Title)
+	c.App.Version = strings.TrimSpace(c.App.Version)
+	if c.App.Version == "" {
+		c.App.Version = "0.0.0"
+	}
 	c.Services.XSUAA = strings.TrimSpace(c.Services.XSUAA)
 	c.Services.Destination = strings.TrimSpace(c.Services.Destination)
 	c.Services.Connectivity = strings.TrimSpace(c.Services.Connectivity)
@@ -109,6 +118,17 @@ func (c *Config) applyDefaults() {
 	c.CF.Org = strings.TrimSpace(c.CF.Org)
 	c.CF.Space = strings.TrimSpace(c.CF.Space)
 	c.CF.Domain = strings.TrimSpace(c.CF.Domain)
+
+	// Title defaults to app.name, not a fixed template string — an
+	// operator who only sets app.name (and never touches app.title)
+	// should see their own app's name in the OpenAPI docs, not the
+	// upstream template's title. Placed here, after App.Name has been
+	// trimmed to its final value, so a blank app.name (which Validate
+	// will flag separately) does not leave Title pointing at a
+	// pre-trim value.
+	if c.App.Title == "" {
+		c.App.Title = c.App.Name
+	}
 
 	if c.App.Name == "" {
 		return

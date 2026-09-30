@@ -226,11 +226,11 @@ func buildRouter(authMW gin.HandlerFunc, caller btpingo.OnPremCaller, mutator bt
 
 	// Mount a huma.API on top of the same Gin group. huma generates a
 	// real OpenAPI 3.1 spec from the handler signatures and serves it +
-	// a Swagger UI for free:
+	// a docs page for free:
 	//
 	//   GET /api/openapi.json   — the spec (OpenAPI 3.1)
 	//   GET /api/openapi.yaml   — same, YAML
-	//   GET /api/docs           — Swagger UI rendered from the spec
+	//   GET /api/docs           — Stoplight Elements rendered from the spec
 	//   GET /api/schemas/*      — referenced schemas
 	//
 	// They sit under /api so the JWT middleware applies — the spec
@@ -239,8 +239,7 @@ func buildRouter(authMW gin.HandlerFunc, caller btpingo.OnPremCaller, mutator bt
 	// engine root and drop validator from the operations directly,
 	// but the typical case (HF-internal API) is happier with gated
 	// docs.
-	hapi := humagin.NewWithGroup(r, api,
-		huma.DefaultConfig("Go SAP BTP CF Template", "0.1"))
+	hapi := humagin.NewWithGroup(r, api, openAPIConfig())
 
 	// Two constrained-proxy demos. Both are fully typed (JSON in,
 	// JSON out) — SAP's XML is consumed + parsed inside the handler,
@@ -260,6 +259,22 @@ func buildRouter(authMW gin.HandlerFunc, caller btpingo.OnPremCaller, mutator bt
 	adtcheckrun.Register(api, mutator)
 
 	return r
+}
+
+func openAPIConfig() huma.Config {
+	cfg := huma.DefaultConfig("go-btp-mwe", "0.1")
+	// huma.NewWithGroup mounts operations at their path relative to the
+	// "api" group ("/adt-discovery", not "/api/adt-discovery"), and
+	// without an explicit server the spec has no `servers` entry to say
+	// otherwise. A generated client, or the docs page's "Try it" button,
+	// would then call the un-prefixed path and 404. Declaring the
+	// relative server URL "/api" fixes both.
+	cfg.Servers = []*huma.Server{{URL: "/api"}}
+	cfg.Components.SecuritySchemes = map[string]*huma.SecurityScheme{
+		"bearerAuth": {Type: "http", Scheme: "bearer", BearerFormat: "JWT"},
+	}
+	cfg.Security = []map[string][]string{{"bearerAuth": {}}}
+	return cfg
 }
 
 // buildUserAgent derives a traceable User-Agent from the compiled binary's

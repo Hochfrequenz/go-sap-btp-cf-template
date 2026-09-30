@@ -17,8 +17,10 @@ import (
 func testConfig() *Config {
 	cfg := &Config{
 		App: AppConfig{
-			Name:   "acme-app",
-			Module: "github.com/acme/cool-service",
+			Name:    "acme-app",
+			Module:  "github.com/acme/cool-service",
+			Title:   "ACME Service",
+			Version: "2.3",
 		},
 		Services: ServicesConfig{
 			XSUAA:        "acme-xsuaa",
@@ -33,6 +35,37 @@ func testConfig() *Config {
 		},
 	}
 	return cfg
+}
+
+func Test_transformServerMainGo_ReplacesOpenAPIMetadata(t *testing.T) {
+	in := []byte(`cfg := huma.DefaultConfig("Go SAP BTP CF Template", "0.1")`)
+	out, err := transformServerMainGo(in, testConfig())
+	then.AssertThat(t, err, is.Nil())
+	then.AssertThat(t, string(out), is.EqualTo(`cfg := huma.DefaultConfig("ACME Service", "2.3")`))
+}
+
+func Test_transformServerMainGo_IsIdempotent(t *testing.T) {
+	in := []byte(`cfg := huma.DefaultConfig("ACME Service", "2.3")`)
+	out, err := transformServerMainGo(in, testConfig())
+	then.AssertThat(t, err, is.Nil())
+	then.AssertThat(t, string(out), is.EqualTo(string(in)))
+}
+
+// Test_transformServerMainGo_DollarIsLiteral pins a real regression:
+// regexp.ReplaceAll treats `$` in the REPLACEMENT as a backreference
+// (`$1`, `$name`, ...), and cfg.App.Title is operator-supplied data,
+// not a replacement template. A title containing `$` — e.g. an app
+// that charges in a currency and says so in its OpenAPI title — must
+// survive byte-for-byte. This fails under regexp.ReplaceAll (`$1`
+// expands to the capture group, `${x}` to empty since there's no such
+// named group) and passes under regexp.ReplaceAllLiteral.
+func Test_transformServerMainGo_DollarIsLiteral(t *testing.T) {
+	cfg := testConfig()
+	cfg.App.Title = "Cost ${x} $1 API"
+	in := []byte(`cfg := huma.DefaultConfig("Go SAP BTP CF Template", "0.1")`)
+	out, err := transformServerMainGo(in, cfg)
+	then.AssertThat(t, err, is.Nil())
+	then.AssertThat(t, string(out), is.EqualTo(`cfg := huma.DefaultConfig("Cost ${x} $1 API", "2.3")`))
 }
 
 func Test_transformGoMod_ReplacesModuleLine(t *testing.T) {
@@ -285,7 +318,7 @@ import "github.com/hochfrequenz/mwe-extra/lib"
 
 	cfg := testConfig()
 	cfg.App.Module = "github.com/acme/cool-service"
-	plan, err := planGoImports(dir, "github.com/hochfrequenz/mwe", cfg)
+	plan, err := planGoImports(dir, "github.com/hochfrequenz/mwe", cfg, nil)
 	then.AssertThat(t, err, is.Nil())
 
 	// main.go gets rewritten in the plan, both the root import and the
@@ -324,7 +357,7 @@ import (
 
 	cfg := testConfig()
 	cfg.App.Module = "github.com/acme/x"
-	plan, err := planGoImports(dir, "github.com/hochfrequenz/mwe", cfg)
+	plan, err := planGoImports(dir, "github.com/hochfrequenz/mwe", cfg, nil)
 	then.AssertThat(t, err, is.Nil())
 
 	_, after := planResultFor(t, plan, "file.go")
@@ -379,7 +412,7 @@ func Hello() string { return "hello" }
 
 	cfg := testConfig()
 	cfg.Examples.DestinationName = "ACME_S4"
-	plan, err := planExamplesDestination(dir, cfg)
+	plan, err := planExamplesDestination(dir, cfg, nil)
 	then.AssertThat(t, err, is.Nil())
 
 	// foo/handler.go is rewritten: "HF_S4" → "ACME_S4" (twice — const + assertion)
@@ -419,7 +452,7 @@ const destinationName = "my-dest"
 
 	cfg := testConfig()
 	cfg.Examples.DestinationName = "my-dest"
-	plan, err := planExamplesDestination(dir, cfg)
+	plan, err := planExamplesDestination(dir, cfg, nil)
 	then.AssertThat(t, err, is.Nil())
 
 	for _, p := range plan {
@@ -433,7 +466,7 @@ func Test_planExamplesDestination_NoOpWhenNoExamplesDir(t *testing.T) {
 	dir := t.TempDir() // no examples/ subdir
 	cfg := testConfig()
 	cfg.Examples.DestinationName = "ACME_S4"
-	plan, err := planExamplesDestination(dir, cfg)
+	plan, err := planExamplesDestination(dir, cfg, nil)
 	then.AssertThat(t, err, is.Nil())
 	then.AssertThat(t, len(plan), is.EqualTo(0))
 }
@@ -465,6 +498,58 @@ func Test_Run_IsAtomicWhenATransformFails(t *testing.T) {
 	// guarantee. If this fails, the tree is half-applied.
 	gomod, _ := os.ReadFile(filepath.Join(dir, "go.mod"))
 	then.AssertThat(t, string(gomod), is.EqualTo("module github.com/hochfrequenz/mwe\n"))
+}
+
+// Test_Run_ServerMainGoSurvivesBothOverlappingRewriters pins a real
+// regression: cmd/server/main.go is rewritten by two independent
+// passes — the singleFileRewriters entry for transformServerMainGo
+// (OpenAPI title/version) and the tree-wide planGoImports walker (its
+// own import-path literal). Run's Phase 2 writes every plan entry for
+// that path in order, so whichever entry was planned from the stale,
+// pre-rewrite file would silently clobber the other's change on
+// write. This test fails if that regresses.
+func Test_Run_ServerMainGoSurvivesBothOverlappingRewriters(t *testing.T) {
+	dir := t.TempDir()
+	writeFile := func(rel, content string) {
+		full := filepath.Join(dir, rel)
+		then.AssertThat(t, os.MkdirAll(filepath.Dir(full), 0755), is.Nil())
+		then.AssertThat(t, os.WriteFile(full, []byte(content), 0644), is.Nil())
+	}
+	writeFile("go.mod", "module github.com/hochfrequenz/mwe\n\ngo 1.27\n")
+	writeFile("manifest.yml", "applications:\n  - name: foo\n    services:\n      - go-xsuaa\n      - go-dest\n      - go-cc\n  - name: foo-approuter\n    services:\n      - go-xsuaa\n")
+	writeFile("xs-security.json", `{"xsappname":"go-btp-mwe"}`)
+	writeFile("vars.example.yml", "backend-host: go-btp-mwe\ndomain: cfapps.eu10.hana.ondemand.com\n")
+	writeFile("web/package.json", `{"name":"go-btp-mwe-web"}`)
+	writeFile(".github/workflows/deploy.yml", "env:\n  CF_API: x\n  CF_ORG: x\n  CF_SPACE: x\n  BACKEND_HOST: x\n  DOMAIN: x\n")
+	writeFile("cmd/server/main.go", `package main
+
+import (
+	_ "github.com/hochfrequenz/mwe/examples/adtdiscovery"
+)
+
+func openAPIConfig() {
+	cfg := huma.DefaultConfig("Go SAP BTP CF Template", "0.1")
+	_ = cfg
+}
+`)
+
+	cfg := testConfig()
+	_, err := Run(dir, cfg, false /* dryRun */)
+	then.AssertThat(t, err, is.Nil())
+
+	got, err := os.ReadFile(filepath.Join(dir, "cmd/server/main.go"))
+	then.AssertThat(t, err, is.Nil())
+
+	// Both rewrites must be present in the file written to disk:
+	// the import path (planGoImports) ...
+	if !strings.Contains(string(got), `"github.com/acme/cool-service/examples/adtdiscovery"`) {
+		t.Errorf("import path was not rewritten; got:\n%s", got)
+	}
+	// ... and the OpenAPI title/version (transformServerMainGo), which
+	// must not have been reverted by the import-path write.
+	if !strings.Contains(string(got), `huma.DefaultConfig("ACME Service", "2.3")`) {
+		t.Errorf("OpenAPI title/version rewrite was reverted; got:\n%s", got)
+	}
 }
 
 func Test_transformVarsExampleYml_PreservesCRLFLineEndings(t *testing.T) {

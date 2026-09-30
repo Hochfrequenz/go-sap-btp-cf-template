@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"sort"
 	"strings"
 	"testing"
@@ -94,4 +96,41 @@ func diff(a, b map[string]bool) []string {
 		}
 	}
 	return out
+}
+
+// Test_ServedOpenAPISpec_DeclaresAPIServer pins a real regression: huma
+// mounts every operation's path relative to the "api" gin.Group (so the
+// spec's own paths read "/adt-discovery", not "/api/adt-discovery"), and
+// without an explicit `servers` entry the spec never says those relative
+// paths are rooted at /api. A generated client, or the "Try it" button
+// on /api/docs, would then call the un-prefixed path against the current
+// origin and 404. openAPIConfig sets cfg.Servers = []*huma.Server{{URL:
+// "/api"}} to fix that; this test serves the real route and asserts the
+// JSON actually carries it, rather than only unit-testing openAPIConfig()
+// in isolation.
+func Test_ServedOpenAPISpec_DeclaresAPIServer(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	r := buildRouter(func(c *gin.Context) { c.Next() }, fakeRouteCaller{}, fakeRouteMutator{}, logger)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/openapi.json", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/openapi.json: got status %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var spec struct {
+		Servers []struct {
+			URL string `json:"url"`
+		} `json:"servers"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &spec); err != nil {
+		t.Fatalf("decode /api/openapi.json: %v; body: %s", err, rec.Body.String())
+	}
+	if len(spec.Servers) == 0 {
+		t.Fatal("served spec has no `servers` entry; relative operation paths (e.g. /adt-discovery) are not rooted at /api")
+	}
+	if spec.Servers[0].URL != "/api" {
+		t.Errorf("spec.servers[0].url = %q, want %q", spec.Servers[0].URL, "/api")
+	}
 }
