@@ -73,9 +73,9 @@ turn it off — but nothing about the backend requires it, and a fork is free to
 - The XSUAA OAuth auth-code login flow and a session cookie (`JSESSIONID`), so a signed-in browser
   user does not have to handle tokens itself.
 - CSRF protection (`X-CSRF-Token`) for session-cookie requests — the approuter's per-route default.
-  `web/xs-app.json` currently sets `csrfProtection: false` on `/api/*`. (The handshake in
-  ["Calling SAP with a POST / CSRF"](#calling-sap-with-a-post--csrf) is the backend's _outbound_
-  call to SAP and is unrelated to this setting.)
+  `web/xs-app.json` leaves it at that default on `/api/*` (see [JSON-only writes](#json-only-writes)).
+  (The handshake in ["Calling SAP with a POST / CSRF"](#calling-sap-with-a-post--csrf) is the
+  backend's _outbound_ call to SAP and is unrelated to this setting.)
 - Forwarding of the resulting JWT to the Go backend as `Authorization: Bearer <jwt>`, via the
   `forwardAuthToken: true` destination in `manifest.yml`.
 
@@ -87,6 +87,7 @@ turn it off — but nothing about the backend requires it, and a fork is free to
   checks signature, audience and expiry (`btpingo`'s `auth.go`) the same way either way.
 - Such a token carries no user: `user_name`/`email` claims are absent, Principal Propagation has no
   user JWT to forward, and `/api/docs` can no longer be opened in a browser.
+- Writes that carry a body must still be JSON (`application/json` or `application/*+json`; see [JSON-only writes](#json-only-writes)).
 
 **To remove it:**
 
@@ -238,6 +239,8 @@ A handler is four mechanical steps:
 api.POST("/invoice-sync", invoiceSyncHandler(svc))
 ```
 
+Writes on api already go through requireJSONBody (see [JSON-only writes](#json-only-writes)), so a write handler's body is declared as JSON; it still needs the binding/validation below.
+
 #### Steps 2–4: the handler.
 
 The full, typed, compileable example lives at [**`examples/invoicesync/handler.go`**](examples/invoicesync/handler.go) - read that file for the complete pattern (request type with validation tags, `svc.CallOnPremise` call, response streaming).
@@ -284,6 +287,7 @@ func Handler(svc btpingo.OnPremCaller) gin.HandlerFunc {
 
 The template does **not** ship a transparent-proxy route by default - strict typing at the Gin boundary needs a fixed endpoint set, and the security story is much better when every path is explicit.
 If a fork genuinely wants a catch-all pass-through, `ginpingo.ProxyHandler(svc)` (taking `*btpingo.Service`) still exists; wire it yourself, gate it with `ginpingo.RequireScope("...User")`, and be deliberate about which users can reach it.
+On the api group, requireJSONBody rejects non-JSON writes; register such a route on a sibling group (see [JSON-only writes](#json-only-writes)).
 **For anything that writes state on the SAP side, read the next sub-section first** - validation-before-SAP is how you keep on-prem Short Dumps out of your life.
 
 Unit-test the handler with a one-method fake of `btpingo.OnPremCaller` / `btpingo.OnPremMutator` in its own `handler_test.go` (pattern: [`examples/invoicesync/handler_test.go`](examples/invoicesync/handler_test.go)); `btpingo`'s stubs of the XSUAA / Destination / CC stack live in its unexported `internal/testkit` and cannot be imported.
@@ -344,6 +348,10 @@ api.POST("/large-import",
 The per-route middleware stacks before the handler.
 If the global cap is in force, it still rejects on the fast path because it ran first — so a per-route override is meaningful only when its limit is **smaller** than the global.
 To genuinely lift the cap on one route, structure that route under its own router group that does **not** include the global `MaxBodySize`, or raise the global value to the highest legitimate body any route in the app needs.
+
+#### JSON-only writes
+
+`cmd/server/main.go`'s `requireJSONBody` middleware sits on the `api` group, after `authMW`. A `POST`, and any `PUT`/`PATCH`/`DELETE` that carries a body, is rejected with a typed `415` (`code: "invalid_request"`) unless its media type is `application/json` or `application/*+json`; parameters such as `charset` are ignored, and a missing `Content-Type` is rejected. `GET`/`HEAD`/`OPTIONS` and bodyless `PUT`/`PATCH`/`DELETE` pass through. A route that must accept another format (for example a fork's `ginpingo.ProxyHandler` forwarding XML) goes on a sibling group without the middleware: `raw := r.Group("/api", authMW)`. On the approuter side (see ["Do you need the approuter?"](#do-you-need-the-approuter)), `web/xs-app.json`'s `^/api/(.*)$` route leaves CSRF protection at its default (on): a browser session writing through the approuter first fetches a token with `GET /api/me` and `X-CSRF-Token: Fetch`, then sends it as `X-CSRF-Token`. Requests carrying `x-approuter-authorization`, and callers of the backend's own route, are not subject to that check.
 
 ---
 
@@ -621,7 +629,7 @@ If you do hit a wall, [How it works under the hood](#how-it-works-under-the-hood
 ### When you need to look deeper
 
 - **Your Destination uses Principal Propagation, not Basic Auth.** The approuter-forwarded user JWT is stashed in the request context under `btpingo.ForwardedUserTokenKey{}`; implement a `DestinationAuthenticator` that reads it and sets `SAP-Connectivity-Authentication`. See "Extension points" below.
-- **Your on-prem endpoint needs CSRF tokens for writes** (most ADT writes do). Use `svc.CallOnPremiseMutating` — it runs the `X-CSRF-Token: Fetch` → attach-token-and-cookies → retry-once-on-403 dance transparently. See [Calling SAP with a POST — the CSRF case](#calling-sap-with-a-post--the-csrf-case) below.
+- **Your on-prem endpoint needs CSRF tokens for writes** (most ADT writes do). Use `svc.CallOnPremiseMutating` — it runs the `X-CSRF-Token: Fetch` → attach-token-and-cookies → retry-once-on-403 dance transparently. See [Calling SAP with a POST — the CSRF case](#calling-sap-with-a-post--csrf) below.
 - **One of the demo endpoints (`/api/adt-discovery`, `/api/adt-checkrun`) returns 502 or an unexpected 401.** See the failure-mode ladder under "Smoke tests" below.
 
 ## Deployment
