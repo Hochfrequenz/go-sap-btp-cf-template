@@ -7,8 +7,7 @@
       "source": "^/api/(.*)$",
       "target": "/api/$1",
       "destination": "GoBackend",
-      "authenticationType": "xsuaa",
-      "csrfProtection": false
+      "authenticationType": "xsuaa"
     },
     {
       "source": "^/healthz$",

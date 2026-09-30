@@ -238,6 +238,8 @@ A handler is four mechanical steps:
 api.POST("/invoice-sync", invoiceSyncHandler(svc))
 ```
 
+Any non-`GET`/`HEAD`/`OPTIONS` route on `api` already goes through `requireJSONBody` (see [JSON-only writes](#json-only-writes)) — your write handler only ever sees an `application/json` body, nothing else to guard against at that layer.
+
 #### Steps 2–4: the handler.
 
 The full, typed, compileable example lives at [**`examples/invoicesync/handler.go`**](examples/invoicesync/handler.go) - read that file for the complete pattern (request type with validation tags, `svc.CallOnPremise` call, response streaming).
@@ -344,6 +346,10 @@ api.POST("/large-import",
 The per-route middleware stacks before the handler.
 If the global cap is in force, it still rejects on the fast path because it ran first — so a per-route override is meaningful only when its limit is **smaller** than the global.
 To genuinely lift the cap on one route, structure that route under its own router group that does **not** include the global `MaxBodySize`, or raise the global value to the highest legitimate body any route in the app needs.
+
+#### JSON-only writes
+
+`cmd/server/main.go`'s `requireJSONBody` middleware sits on the `api` group, after `authMW`: any request other than `GET`/`HEAD`/`OPTIONS` is rejected with a typed `415` unless its `Content-Type` is exactly `application/json` (a `charset` parameter is allowed) — a request with no `Content-Type` at all is rejected too. Every write handler this template ships already parses the body as JSON, so this makes that requirement explicit at the router boundary instead of leaving it to each handler's own binder. On the approuter side, `web/xs-app.json`'s `^/api/(.*)$` route keeps CSRF protection at its default (on), so writes to `/api/*` need a fetched `X-CSRF-Token` as well.
 
 ---
 
