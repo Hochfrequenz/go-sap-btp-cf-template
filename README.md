@@ -272,6 +272,8 @@ Two things to apply the same discipline to, that are easy to forget:
 Any request whose `Content-Length` announces more, or that streams more under chunked / lying-Content-Length, is rejected with a typed `413` envelope (`code: "request_too_large"`) before reaching the Gin binder.
 The cap protects the app's 128 MiB CF memory quota from a single oversized POST.
 
+Relatedly, `manifest.yml`'s backend app sets `GOMEMLIMIT: 100MiB` (~80% of `memory: 128M`) so the Go runtime feels the container's memory pressure instead of relying solely on the kernel's OOM killer. **If your fork raises `memory:` for a data-heavy API, raise `GOMEMLIMIT` together with it**, at roughly the same ~80% ratio — `.github/workflows/template-guards.yml` fails the build if `GOMEMLIMIT` is missing, malformed, `off`, below 16MiB, or not below `memory:`.
+
 For a route that legitimately needs more (large-file import, batch upload), install a per-route override before the handler:
 
 ```go

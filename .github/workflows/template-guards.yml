@@ -5,7 +5,7 @@ name: Template guards
 # the tree leaves downstream users with a half-renamed repo on first
 # `go run ./cmd/apply-config`.
 #
-# Two guards:
+# Three guards:
 #   1. apply-config smoke — copy the repo, run apply-config against a
 #      fixture config.yml, then `go build ./... && go test ./...` in the
 #      rewritten tree. Breaks if any rewriter stops matching its target.
@@ -13,7 +13,9 @@ name: Template guards
 #      and `./cmd/server` outside their allow-listed homes. A new
 #      hard-coded reference that the rewriter doesn't know about fails
 #      CI, forcing the contributor to either extend the rewriter or
-#      opt-out of the gate explicitly.
+#      opt-out of the gate explicitly. Also gates GOMEMLIMIT against
+#      manifest.yml's memory: quota (see its step below), so a fork that
+#      raises memory: without raising GOMEMLIMIT in lockstep fails here.
 
 on:
   push:
@@ -116,6 +118,75 @@ jobs:
 
       - name: Install ripgrep
         run: sudo apt-get update && sudo apt-get install -y ripgrep
+
+      - name: GOMEMLIMIT must be present, valid, and below the backend app's memory
+        run: |
+          set -euo pipefail
+          # Select the BACKEND app by name — both apps declare
+          # `memory: 128M`, so `name: ((backend-host))` is what
+          # distinguishes it from the `((backend-host))-web` approuter.
+          gomemlimit=$(yq eval '.applications[] | select(.name == "((backend-host))") | .env.GOMEMLIMIT' manifest.yml)
+          memory=$(yq eval '.applications[] | select(.name == "((backend-host))") | .memory' manifest.yml)
+
+          if [ -z "$gomemlimit" ] || [ "$gomemlimit" = "null" ]; then
+            echo "::error::manifest.yml backend app (((backend-host))) is missing GOMEMLIMIT in its env: block." >&2
+            exit 1
+          fi
+
+          if [ "$gomemlimit" = "off" ]; then
+            echo "::error::GOMEMLIMIT='off' disables the soft memory limit entirely; the Go runtime never reacts to container memory pressure. Set it to a byte value below memory: ($memory)." >&2
+            exit 1
+          fi
+
+          # Go runtime GOMEMLIMIT format: decimal byte count with an
+          # optional B/KiB/MiB/GiB/TiB suffix (see `go doc runtime`).
+          # CF's own "M"/"MB"-style suffixes are NOT this format.
+          if ! [[ "$gomemlimit" =~ ^[0-9]+(B|KiB|MiB|GiB|TiB)?$ ]]; then
+            echo "::error::GOMEMLIMIT='$gomemlimit' is not a valid Go runtime GOMEMLIMIT value (decimal byte count with optional B/KiB/MiB/GiB/TiB suffix). A CF-style value like '100M' or '100MB' makes the Go runtime throw 'malformed GOMEMLIMIT' and the app crash-loops on deploy. See \`go doc runtime\`." >&2
+            exit 1
+          fi
+
+          to_bytes() {
+            local val="$1"
+            if [[ "$val" =~ ^([0-9]+)(B|KiB|MiB|GiB|TiB)?$ ]]; then
+              local num="${BASH_REMATCH[1]}"
+              local unit="${BASH_REMATCH[2]}"
+              case "$unit" in
+                ""|B) echo "$num" ;;
+                KiB) echo $((num * 1024)) ;;
+                MiB) echo $((num * 1024 * 1024)) ;;
+                GiB) echo $((num * 1024 * 1024 * 1024)) ;;
+                TiB) echo $((num * 1024 * 1024 * 1024 * 1024)) ;;
+              esac
+            fi
+          }
+
+          gomemlimit_bytes=$(to_bytes "$gomemlimit")
+
+          sixteen_mib=$((16 * 1024 * 1024))
+          if [ "$gomemlimit_bytes" -lt "$sixteen_mib" ]; then
+            echo "::error::GOMEMLIMIT='$gomemlimit' ($gomemlimit_bytes bytes) is below 16MiB, which is too tight to be an intentional limit." >&2
+            exit 1
+          fi
+
+          # CF manifest memory units: M = MiB, G = GiB.
+          if ! [[ "$memory" =~ ^([0-9]+)(M|G)$ ]]; then
+            echo "::error::manifest.yml backend app memory='$memory' is not in the expected CF format (a number followed by M or G)." >&2
+            exit 1
+          fi
+          mem_num="${BASH_REMATCH[1]}"
+          mem_unit="${BASH_REMATCH[2]}"
+          case "$mem_unit" in
+            M) memory_bytes=$((mem_num * 1024 * 1024)) ;;
+            G) memory_bytes=$((mem_num * 1024 * 1024 * 1024)) ;;
+          esac
+
+          if [ "$gomemlimit_bytes" -ge "$memory_bytes" ]; then
+            echo "::error::GOMEMLIMIT='$gomemlimit' ($gomemlimit_bytes bytes) is not below manifest.yml's memory: $memory ($memory_bytes bytes). Lower GOMEMLIMIT, or raise memory: too and keep it in step (roughly the same ~80% ratio, see README)." >&2
+            exit 1
+          fi
+
+          echo "OK: GOMEMLIMIT=$gomemlimit ($gomemlimit_bytes bytes) is valid and below memory: $memory ($memory_bytes bytes)."
 
       - name: Module path must only appear in rewriter-known files
         run: |
