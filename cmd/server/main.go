@@ -202,17 +202,9 @@ func compress(h http.Handler) http.Handler {
 // would have produced, instead of a clean-looking short OR overlong
 // body.
 //
-// The overlong case matters specifically because of gzhttp: once
-// compression kicks in, gzhttp removes the Content-Length header from
-// the response it sends, so net/http's own ErrContentLength enforcement
-// (which only fires when a Content-Length header is actually on the
-// wire) never sees a mismatch — the extra bytes would otherwise reach
-// the client as a clean, fully-decodable compressed response.
-// clGuardWriter.Write additionally refuses to forward any bytes from a
-// call that would exceed the declared length (see its doc comment), so
-// those extra bytes never even reach gzhttp; this end-of-handler check
-// is the backstop that catches the mismatch regardless of how the
-// writer got there.
+// clGuardWriter.Write also refuses to forward any bytes from a call that
+// would exceed the declared length, so the extra bytes never reach
+// gzhttp; this end-of-handler check is the backstop for both directions.
 //
 // HEAD requests are exempt: RFC 9110 requires the same Content-Length a
 // GET would carry, but a HEAD handler never writes a body, so "written !=
