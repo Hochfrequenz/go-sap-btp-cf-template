@@ -72,11 +72,10 @@ turn it off — but nothing about the backend requires it, and a fork is free to
 
 - The XSUAA OAuth auth-code login flow and a session cookie (`JSESSIONID`), so a signed-in browser
   user does not have to handle tokens itself.
-- CSRF protection (`X-CSRF-Token`) for session-cookie requests — the approuter's per-route default,
-  but **off** in this template: `web/xs-app.json` sets `csrfProtection: false` on `/api/*`, so a
-  browser `POST` such as `/api/adt-checkrun` is not CSRF-checked. (The handshake in
+- CSRF protection (`X-CSRF-Token`) for session-cookie requests — the approuter's per-route default.
+  `web/xs-app.json` currently sets `csrfProtection: false` on `/api/*`. (The handshake in
   ["Calling SAP with a POST / CSRF"](#calling-sap-with-a-post--csrf) is the backend's _outbound_
-  call to SAP; it does not protect `/api/*`.)
+  call to SAP and is unrelated to this setting.)
 - Forwarding of the resulting JWT to the Go backend as `Authorization: Bearer <jwt>`, via the
   `forwardAuthToken: true` destination in `manifest.yml`.
 
@@ -1044,7 +1043,7 @@ Compression alone would otherwise open a length-mismatch gap in both directions:
 You do not need this section to write a handler. It is here for when a deploy misbehaves, a token doesn't validate, or you want to understand what `svc.CallOnPremise` actually does on the wire.
 
 Two CF applications share one XSUAA instance. The approuter is the browser-facing front door; the Go backend is the thing that actually talks to the on-premise SAP system. The Destination and Connectivity services are bound only to the backend.
-The sequence below assumes the approuter is kept (see ["Do you need the approuter?"](#do-you-need-the-approuter)); without it, steps 1–4 collapse to the caller fetching a client_credentials token from XSUAA and calling the backend directly with it.
+The sequence below assumes the approuter is kept (see ["Do you need the approuter?"](#do-you-need-the-approuter)); without it, steps 1–4 collapse to the caller fetching a `client_credentials` token from XSUAA and calling the backend directly with it.
 
 ```mermaid
 sequenceDiagram
