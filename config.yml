@@ -26,8 +26,9 @@ app:
   module: github.com/hochfrequenz/go-sap-btp-cf-template
 
   # Title and version shown in the generated OpenAPI document (/api/docs).
-  # Title defaults to app.name. Always quote version: YAML reads 1.10 as 1.1.
-  title: Go SAP BTP CF Template
+  # Leave title empty to use app.name. Always quote version: YAML reads
+  # 1.10 as 1.1.
+  title: ""
   version: "0.1"
 
 # CF service instance names the backend binds to. Leave any field blank
