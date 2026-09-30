@@ -1041,6 +1041,10 @@ gzhttp's defaults are kept as-is, including its zstd support — negotiation is 
 
 Compression alone would otherwise open a length-mismatch gap in both directions: if a handler announces a `Content-Length` and then writes fewer bytes than that — e.g. a proxied on-prem connection dropping mid-copy — or, since `gzhttp` removes the `Content-Length` header once it starts compressing, _more_ bytes than that, `gzhttp` would still frame a syntactically complete, cleanly-closed compressed stream around the wrong number of bytes, so the client would see a clean `200` instead of the broken connection an uncompressed response would have produced. `contentLengthGuard` sits between `compress` and Gin specifically to close that gap: its writer clamps output at the declared length (so excess bytes are never forwarded) and the guard aborts the connection (`http.ErrAbortHandler`) whenever the length actually written differs from what was declared, so a truncated _or_ overlong response fails the same way with or without compression.
 
+### Data-heavy APIs
+
+An endpoint that returns a lot of data — a time series, a bulk export — has its own set of concerns: raising `btpingo`'s on-premise response cap, buffering vs. streaming, how the timeouts above interact with a large or slow payload, paging, and payload shape (NDJSON/CSV, timestamps, decimals). [`docs/data-heavy-apis.md`](docs/data-heavy-apis.md) collects all of it in one place, cross-linked with [the ABAP-side considerations in the backend playbook](docs/abap-backend-playbook.md#4-data-heavy-endpoints-considerations).
+
 ## How it works under the hood
 
 You do not need this section to write a handler. It is here for when a deploy misbehaves, a token doesn't validate, or you want to understand what `svc.CallOnPremise` actually does on the wire.
@@ -1089,6 +1093,7 @@ XSUAA client-credentials tokens are cached with a 30 s refresh leeway and collap
 ## References
 
 - [ABAP backend playbook](docs/abap-backend-playbook.md) — if the on-premise side is your own ABAP HTTP API: the conventions both halves share, SAP pitfalls, and copyable ABAP code
+- [Data-heavy APIs](docs/data-heavy-apis.md) — response-size cap, streaming vs. buffering, timeouts, compression, and paging for endpoints that return a lot of data (e.g. time series)
 - [SAP BTP Connectivity & Destination (Help Portal)](https://help.sap.com/docs/connectivity/sap-btp-connectivity-cf)
 - [SAP Cloud Connector install guide](https://help.sap.com/docs/connectivity/sap-btp-connectivity-cf/installation)
 - [Destination service REST API](https://help.sap.com/docs/connectivity/sap-btp-connectivity-cf/destinations-destination-service-rest-api) — `/destination-configuration/v1/destinations/{name}` is the generic lookup this MWE uses

@@ -11,6 +11,7 @@ Examples use the namespace `/XYZ/` (files `#xyz#…`). With a customer namespace
 - [1. Conventions both halves agree on](#1-conventions-both-halves-agree-on)
 - [2. Pitfalls](#2-pitfalls)
 - [3. Reference implementation](#3-reference-implementation)
+- [4. Data-heavy endpoints (considerations)](#4-data-heavy-endpoints-considerations)
 
 ## 1. Conventions both halves agree on
 
@@ -883,3 +884,17 @@ START-OF-SELECTION.
 ```
 
 Run the report on each system after every change to the table or the rows. Unit tests may read the fixture under `RISK LEVEL HARMLESS` but never write to it. Every other test stays free of database access, and seams such as the presence interface above keep it that way. Keep `FLTP` literals well inside what every kernel can store. On the SAP_BASIS 750 system, literals with a magnitude below about `1.0E-64` (for example `1.0E-300`) were stored as zero, while the S/4HANA system stored them correctly. A value only one system can store makes a cross-system test fail because of how the row was inserted, not because of how your code formats it.
+
+## 4. Data-heavy endpoints (considerations)
+
+**The ABAP design for a data-heavy endpoint is not decided anywhere in this repo, and there is no ABAP template to point to.** This section is a list of things to weigh when you design one, not a specification, and none of the reference code in section 3 is meant as a starting point for it. The Go-side half of this topic — the on-premise response cap, streaming vs. buffering, timeouts, compression, payload shape and paging — is in [`docs/data-heavy-apis.md`](data-heavy-apis.md); the two documents are cross-linked because they're read by different audiences (the Go handler author vs. whoever writes the ABAP side) and deliberately don't repeat each other's content.
+
+- **Expect each page to have to fit in memory: the writer holds the whole document before it hands any of it back.** The [JSON writer (sXML)](#json-writer-sxml) above builds the whole document in `cl_sxml_string_writer` before `get_output` hands the caller the finished bytes — there's no point in that pipeline where a partially-written document is emitted incrementally. Whatever paging scheme you pick, each page's size is bounded by what that writer can hold in the work process's memory at once, not by anything downstream.
+
+  Expect nothing to reach Go until the page is finished: a classic ICF handler hands its response over when `handle_request` returns, so time-to-first-byte is the whole page's `SELECT` plus formatting time. That has to fit inside the tightest timeout in front of it (30 s at the approuter by default, see [the Go-side guide](data-heavy-apis.md#timeouts-across-the-chain)).
+
+- **Expect a page's processing to have to complete within the work process's maximum runtime** — the same `rdisp/max_wprun_time` / `rdisp/scheduler/prio_*/max_runtime` limit already discussed above for the `TIME_OUT` dump. That bounds how much a single page can reasonably `SELECT` and format before the system kills the work process, independent of whatever deadline the Go side is using. See [§2 Runtime](#runtime) above: a page that exceeds this runtime or exhausts memory dumps (`TIME_OUT`, memory exhaustion) and answers HTML instead of JSON, which Go reports as a 502 `upstream_unreachable`, not as "page too big" — there is no distinguishable error for a page that was simply too large.
+
+- **Expect keyset paging on the time key to be the natural fit for time-series-shaped data**: a `SELECT` filtered and ordered on the timestamp/sequence column, with the page boundary carried forward as a cursor rather than recomputed from a row count, on a unique key — if the timestamp alone isn't unique, include the series key. That's a statement about the shape of the data, not a prescription that it's the only workable option.
+
+- **Format has to agree with the Go-side contract.** Whatever the ABAP side emits — timestamp format, how decimals are rendered — has to match what [`docs/data-heavy-apis.md`](data-heavy-apis.md) documents for the Go side. This is a two-way constraint: the Go side can't unilaterally fix a format the ABAP side doesn't also produce, and vice versa. §3's [`write_number`](#json-writer-sxml) takes `TYPE i` only; passing a decimal to it would drop the fractional part, so the endpoint has to format decimals explicitly and emit them with `write_string`, which matches the Go-side decimals-as-strings advice.
