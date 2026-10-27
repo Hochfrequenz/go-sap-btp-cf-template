@@ -635,6 +635,8 @@ If you do hit a wall, [How it works under the hood](#how-it-works-under-the-hood
 
 ## Deployment
 
+For streaming RPCs, also read [HTTP/2, gRPC and connect-style routes](#http2-grpc-and-connect-style-routes).
+
 ### Prerequisites
 
 Before any `cf push` there are **three things a human has to do** in addition to having a Cloud Foundry CLI session:
@@ -908,6 +910,79 @@ Why `/sap/bc/adt/discovery` as the probe: it's a standard ABAP Development Tools
 - `403` with an SAP-branded body: the destination's stored user authenticated successfully but does not have authorization for the path you chose. Switch the path, not the destination.
 
 </details>
+
+### HTTP/2, gRPC and connect-style routes
+
+Native gRPC and bidirectional Connect streams need HTTP/2 on **every hop**; Connect unary and server-streaming calls can also use HTTP/1.1. Client-facing HTTPS alone does not enable HTTP/2 between Gorouter and your app. Confirm that your foundation's load balancers and Gorouter support end-to-end HTTP/2 with the platform operator; see the [CF HTTP/2 guide](https://docs.cloudfoundry.org/devguide/http2-protocol.html) and [operator prerequisites](https://docs.cloudfoundry.org/adminguide/supporting-http2.html).
+
+**Map the backend app, not the approuter.** With CF CLI v8, substitute your backend app name, domain and hostname:
+
+```sh
+cf map-route <app> <domain> --hostname <host> --app-protocol http2
+# If this app is already mapped to that route, change the existing destination:
+cf update-destination <app> <domain> --hostname <host> --app-protocol http2
+```
+
+The flag is **`--app-protocol`**, not `--destination-protocol` (not a `cf map-route` flag). `map-route` does not update an existing mapping's protocol. See the official CLI references for [map-route](https://cli.cloudfoundry.org/en-US/v8/map-route.html) and [update-destination](https://github.com/cloudfoundry/cli/blob/v8.16.0/command/v7/update_destination_command.go). Keep the HTTP/2 destination configuration in your fork's deployment process and recheck it after deployments.
+
+Verify the **destination's** protocol using the [CF v3 API](https://v3-apidocs.cloudfoundry.org/index.html#list-destinations-for-a-route) (requires `jq`):
+
+```sh
+APP_GUID=$(cf app <app> --guid)
+cf curl "/v3/apps/$APP_GUID/routes" | jq '.resources[] | {guid, url, protocol}'
+# Copy the GUID of the intended hostname/path from the output above.
+ROUTE_GUID="<route-guid>"
+cf curl "/v3/routes/$ROUTE_GUID/destinations?app_guids=$APP_GUID" |
+  jq '.destinations[] | {app_guid: .app.guid, port, protocol}'
+```
+
+Expect `"protocol": "http2"` for this app's destination. The route object's top-level `protocol` remains `"http"` (rather than `"tcp"`); it does **not** prove HTTP/2 delivery. Follow pagination links if the route list spans pages. A protocol mismatch can look like a generic `502` or connection reset.
+
+**App-side transport.** Gorouter delivers HTTP/2 **with prior knowledge**, not an HTTP/1.1 Upgrade handshake. Serve cleartext HTTP/2 (h2c) on `$PORT`; the platform terminates public TLS. This standalone transport probe uses only the [Go 1.24+ standard library](https://pkg.go.dev/net/http#Protocols), supported by this repo's Go version:
+
+```go
+package main
+
+import (
+    "fmt"
+    "log"
+    "net/http"
+    "os"
+    "time"
+)
+
+func main() {
+    port := os.Getenv("PORT")
+    if port == "" {
+        port = "8080"
+    }
+    protocols := new(http.Protocols)
+    protocols.SetHTTP1(true)
+    protocols.SetUnencryptedHTTP2(true)
+    mux := http.NewServeMux()
+    mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+        fmt.Fprintln(w, r.Proto)
+    })
+    srv := &http.Server{
+        Addr: ":" + port, Handler: mux, Protocols: protocols,
+        ReadHeaderTimeout: 10 * time.Second,
+        ReadTimeout:       60 * time.Second,
+        WriteTimeout:      900 * time.Second,
+        IdleTimeout:       120 * time.Second,
+    }
+    log.Fatal(srv.ListenAndServe())
+}
+```
+
+Locally, `curl --http2-prior-knowledge http://localhost:8080/healthz` should print `HTTP/2.0`; `curl --http1.1 http://localhost:8080/healthz` should print `HTTP/1.1` (use a curl build with HTTP/2 support). After mapping, `curl --http2 https://<host>.<domain>/healthz` should print `HTTP/2.0` from this probe. That body reports the **app-side** protocol; curl's negotiated public protocol alone is not sufficient.
+
+This is a health probe, **not an RPC implementation or a replacement for the template's authenticated router**. A fork can add `Protocols` to `newHTTPServer` in `cmd/server/main.go`, then mount its generated RPC handlers with these caveats:
+
+- **Approuter:** streaming through the optional SAP approuter is **untested here**; do not assume it preserves HTTP/2, trailers or bidirectional streaming. Start with clients calling the backend's HTTPS route directly and sending a bearer token. See [Do you need the approuter?](#do-you-need-the-approuter). The approuter destination's 900000 ms timeout is not a guarantee of streaming support.
+- **Timeouts:** `newHTTPServer`'s `WriteTimeout` is **900 s**, cutting off longer-lived streams even if data keeps flowing. Its **60 s `ReadTimeout`** also matters for streaming request bodies. Use explicit stream deadlines/cancellation and a streaming-specific timeout policy rather than removing protections globally; see [Timeouts](#timeouts--four-layers-three-of-them-ours). Gorouter's [HTTP/2 request timeout](https://github.com/cloudfoundry/routing-release/blob/develop/jobs/gorouter/spec) and upstream load-balancer limits still apply and require operator confirmation.
+- **JWT and framing:** keep RPCs authenticated and scope-authorized, including on the directly reachable backend route. The template's `ginpingo.JWT(validator)` authenticates at request entry, **not on each stream message**; an open stream does not automatically close when its JWT expires. Define a maximum stream lifetime/token-expiry policy and reconnect with a fresh token. Native grpc-go handlers need equivalent unary/stream authentication interceptors with gRPC status errors, not Gin's JSON error responses. Connect handlers likewise need protocol-appropriate authentication errors. Do not mount RPC handlers on the JSON-only `api` group: binary RPC media types would get `415`. Use an authenticated sibling group or a separate authenticated RPC mux; review body-size limits and bypass generic response compression in favour of the RPC library's own framing/compression.
+
+**Verification (2026-10-27):** command names, flags, prior-knowledge delivery and API fields were checked against official CF documentation/source, including the [CLI v8 command definition](https://github.com/cloudfoundry/cli/blob/v8.16.0/command/v7/map_route_command.go) and [route destination schema](https://v3-apidocs.cloudfoundry.org/index.html#the-destination-object). The Go probe was compiled and exercised locally over HTTP/1.1 and cleartext HTTP/2. No live CF/SAP BTP deployment, generated gRPC/Connect service, long-lived/bidirectional stream, or approuter streaming path was tested; the template's default REST server is unchanged.
 
 ## Continuous deployment
 
