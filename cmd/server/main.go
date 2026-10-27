@@ -216,7 +216,7 @@ func buildRouter(authMW gin.HandlerFunc, caller btpingo.OnPremCaller, mutator bt
 	// the access log and any AbortError envelope share the ID. MaxBodySize
 	// sits before any handler that reads the body — an oversized payload
 	// fails fast with a typed 413 rather than reaching the Gin binder
-	// where it would buffer into the app's 128 MiB CF memory quota.
+	// where it would buffer into the backend app's CF memory quota.
 	// requestLog stays innermost so its deferred access-log line captures
 	// the final response status; securityHeaders sits immediately before
 	// it.
