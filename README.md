@@ -957,11 +957,11 @@ That is deliberate: there is no meaningful "just run it" mode for a BTP-integrat
 The recommended feedback loop is the unit test suite:
 
 ```sh
-go test ./... -race
+CGO_ENABLED=1 go test ./... -race
 go test ./... -covermode=count -coverprofile=coverage.out
 ```
 
-CI enforces 90% line coverage (`.github/workflows/coverage.yml`).
+Races are checked on every push and pull request in CI (`.github/workflows/test.yml`), and the coverage job also runs the race detector (`.github/workflows/coverage.yml`). CI enforces 90% line coverage.
 
 If you need to exercise Gin handlers against real (stub) BTP services locally, set the env explicitly — the required shape matches `btpingo`'s `env.go` struct tags.
 
