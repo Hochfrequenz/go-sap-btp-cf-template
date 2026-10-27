@@ -922,7 +922,7 @@ cf map-route <app> <domain> --hostname <host> --app-protocol http2
 cf update-destination <app> <domain> --hostname <host> --app-protocol http2
 ```
 
-The flag is **`--app-protocol`**, not `--destination-protocol` (not a `cf map-route` flag). `map-route` does not update an existing mapping's protocol. See the official CLI references for [map-route](https://cli.cloudfoundry.org/en-US/v8/map-route.html) and [update-destination](https://cli.cloudfoundry.org/en-US/v8/update-destination.html). Keep the HTTP/2 destination configuration in your fork's deployment process and recheck it after deployments.
+The flag is **`--app-protocol`**, not `--destination-protocol` (not a `cf map-route` flag). `map-route` does not update an existing mapping's protocol. See the official CLI references for [map-route](https://cli.cloudfoundry.org/en-US/v8/map-route.html) and [update-destination](https://github.com/cloudfoundry/cli/blob/v8.16.0/command/v7/update_destination_command.go). Keep the HTTP/2 destination configuration in your fork's deployment process and recheck it after deployments.
 
 Verify the **destination's** protocol using the [CF v3 API](https://v3-apidocs.cloudfoundry.org/index.html#list-destinations-for-a-route) (requires `jq`):
 
