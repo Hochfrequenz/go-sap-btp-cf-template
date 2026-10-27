@@ -86,7 +86,7 @@ The difference is a size-driven choice, and each pattern has a real limit:
 meant to be raised as a pair; see [the "Body-size cap" section](../README.md#body-size-cap) for why.
 Budget about **3.5× the payload per in-flight buffered request**, not 1×: the raw bytes, the decoded
 structs, and for a reshaping handler the re-encoded output. Measured with go1.27: a 20 MB JSON
- time-series array reached 47–64 MiB of peak heap for `ReadAll` + `Unmarshal` (+ `Marshal`). Keep
+time-series array reached 47–64 MiB of peak heap for `ReadAll` + `Unmarshal` (+ `Marshal`). Keep
 `GOMEMLIMIT` sized for the process's idle heap plus `(max concurrent requests on the route) × 3.5 ×
 (raised payload limit)`, and keep `memory:` about 25% above it.
 Streaming keeps a single request's incremental memory use close to `io.Copy`'s buffer size (32 KiB
