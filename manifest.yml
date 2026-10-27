@@ -30,7 +30,7 @@ applications:
     command: ./bin/server
     env:
       GIN_MODE: release
-      # ~80% of the 128M memory: quota below, in the Go runtime's own
+      # About 80% of the `memory:` quota below, in the Go runtime's own
       # GOMEMLIMIT syntax (decimal bytes + B/KiB/MiB/GiB/TiB suffix — CF's
       # "M" is NOT valid here). Leaves headroom for memory GOMEMLIMIT does
       # not count (binary mappings, non-Go allocations) and other
