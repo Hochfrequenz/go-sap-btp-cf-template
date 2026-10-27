@@ -112,8 +112,9 @@ regardless of whether the approuter is kept. Making the approuter the only way i
 `apps.internal` routing, which this template does not set up.
 
 **Cost of keeping it:** one more CF app, one more route (see the route-quota check under
-["Pre-flight gotchas"](#pre-flight-gotchas)), 128 MB memory. The interactive OpenAPI docs at
-`/api/docs` are JWT-gated either way, approuter or not.
+["Pre-flight gotchas"](#pre-flight-gotchas)), plus the approuter app's own `memory:` quota from
+`manifest.yml`. The interactive OpenAPI docs at `/api/docs` are JWT-gated either way, approuter or
+not.
 
 ## Repository layout
 
@@ -333,9 +334,9 @@ Two things to apply the same discipline to, that are easy to forget:
 
 `cmd/server/main.go` installs `ginpingo.MaxBodySize(ginpingo.DefaultMaxBodyBytes)` (1 MiB) globally.
 Any request whose `Content-Length` announces more, or that streams more under chunked / lying-Content-Length, is rejected with a typed `413` envelope (`code: "request_too_large"`) before reaching the Gin binder.
-The cap protects the app's 128 MiB CF memory quota from a single oversized POST.
+The cap protects the backend app's `memory:` quota in `manifest.yml` from a single oversized POST.
 
-Relatedly, `manifest.yml`'s backend app sets `GOMEMLIMIT: 100MiB` (~80% of `memory: 128M`) so the Go runtime feels the container's memory pressure instead of relying solely on the kernel's OOM killer. **If your fork raises `memory:` for a data-heavy API, raise `GOMEMLIMIT` together with it**, at roughly the same ~80% ratio — `.github/workflows/template-guards.yml` fails the build if `GOMEMLIMIT` is missing, malformed, `off`, below 16MiB, or not below `memory:`.
+Relatedly, the backend app's `GOMEMLIMIT` in `manifest.yml` is kept at roughly 80% of the backend's `memory:` quota so the Go runtime feels the container's memory pressure instead of relying solely on the kernel's OOM killer. **If your fork raises `memory:` for a data-heavy API, raise `GOMEMLIMIT` together with it**, at roughly the same ~80% ratio — `.github/workflows/template-guards.yml` fails the build if `GOMEMLIMIT` is missing, malformed, `off`, below 16MiB, or not below `memory:`.
 
 For a route that legitimately needs more (large-file import, batch upload), install a per-route override before the handler:
 
@@ -675,7 +676,7 @@ buildpacks:
   - go_buildpack
 env:
   GIN_MODE: release
-  GOMEMLIMIT: 100MiB
+  GOMEMLIMIT: <~80% of memory>
   GO_INSTALL_PACKAGE_SPEC: ./cmd/server
 ```
 
@@ -685,7 +686,7 @@ buildpacks:
   - paketo-buildpacks/go
 env:
   GIN_MODE: release
-  GOMEMLIMIT: 100MiB
+  GOMEMLIMIT: <~80% of memory>
   BP_GO_TARGETS: ./cmd/server
 ```
 
@@ -1032,11 +1033,11 @@ That is deliberate: there is no meaningful "just run it" mode for a BTP-integrat
 The recommended feedback loop is the unit test suite:
 
 ```sh
-go test ./... -race
+CGO_ENABLED=1 go test ./... -race
 go test ./... -covermode=count -coverprofile=coverage.out
 ```
 
-CI enforces 90% line coverage (`.github/workflows/coverage.yml`).
+Races are checked on every push and pull request in CI (`.github/workflows/test.yml`), and the coverage job also runs the race detector (`.github/workflows/coverage.yml`). CI enforces 90% line coverage.
 
 If you need to exercise Gin handlers against real (stub) BTP services locally, set the env explicitly — the required shape matches `btpingo`'s `env.go` struct tags.
 
