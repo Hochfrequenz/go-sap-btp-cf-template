@@ -68,7 +68,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          # full history: build-info.sh needs origin/main to name the branch of a tag checkout
+          # full history: build-info.sh needs origin/<default branch> to name the branch of a tag checkout
           fetch-depth: 0
 
       - uses: actions/setup-go@v7
@@ -79,6 +79,8 @@ jobs:
         env:
           # empty on workflow_dispatch: build-info.sh then falls back to git describe
           TAG: ${{ github.event.release.tag_name }}
+          # build-info.sh names a tag checkout after the default branch (no origin/HEAD after checkout)
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         # CGO_ENABLED=0 avoids a C toolchain dependency on the runner
         # and produces a fully-static binary the binary_buildpack
         # launches with no glibc version coupling. Same command that

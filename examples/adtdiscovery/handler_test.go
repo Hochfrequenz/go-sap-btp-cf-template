@@ -320,7 +320,7 @@ func Test_Handler_ViaHandlerCaller(t *testing.T) {
 	})
 
 	t.Run("a response over the size limit is a 502", func(t *testing.T) {
-		hits, gotAccept := 1, "" // hits=1 skips the helper's 401
+		hits, gotAccept := 1, "" // start at 1 so the fake SAP answers 200 immediately (no 401 first)
 		caller, err := btpingotest.NewHandlerCaller(sapDiscoveryServer(&hits, &gotAccept),
 			btpingotest.WithDestinationName("HF_S4"),
 			btpingotest.WithResponseSizeLimit(64))
@@ -331,6 +331,8 @@ func Test_Handler_ViaHandlerCaller(t *testing.T) {
 		newRouterFor(caller).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/adt-discovery", nil))
 
 		then.AssertThat(t, rec.Code, is.EqualTo(http.StatusBadGateway))
+		then.AssertThat(t, hits, is.EqualTo(2))
+		then.AssertThat(t, strings.Contains(rec.Body.String(), "reading on-premise response body failed"), is.True())
 	})
 }
 
@@ -349,10 +351,10 @@ func Test_Router_WithMockXSUAA(t *testing.T) {
 	then.AssertThat(t, err, is.Nil())
 	srv := httptest.NewServer(xsuaa)
 	t.Cleanup(srv.Close)
-	validator, err := btpingo.NewJWTValidator(context.Background(), xsuaa.Credentials(srv.URL))
+	validator, err := btpingo.NewJWTValidator(t.Context(), xsuaa.Credentials(srv.URL))
 	then.AssertThat(t, err, is.Nil())
 
-	hits, gotAccept := 1, "" // hits=1 skips the helper's 401
+	hits, gotAccept := 1, "" // start at 1 so the fake SAP answers 200 immediately (no 401 first)
 	caller, err := btpingotest.NewHandlerCaller(sapDiscoveryServer(&hits, &gotAccept),
 		btpingotest.WithDestinationName("HF_S4"))
 	then.AssertThat(t, err, is.Nil())
