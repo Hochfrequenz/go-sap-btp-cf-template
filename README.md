@@ -291,7 +291,7 @@ If a fork genuinely wants a catch-all pass-through, `ginpingo.ProxyHandler(svc)`
 On the api group, requireJSONBody rejects non-JSON writes; register such a route on a sibling group (see [JSON-only writes](#json-only-writes)).
 **For anything that writes state on the SAP side, read the next sub-section first** - validation-before-SAP is how you keep on-prem Short Dumps out of your life.
 
-Unit-test the handler with a one-method fake of `btpingo.OnPremCaller` / `btpingo.OnPremMutator` in its own `handler_test.go` (pattern: [`examples/invoicesync/handler_test.go`](examples/invoicesync/handler_test.go)); `btpingo`'s stubs of the XSUAA / Destination / CC stack live in its unexported `internal/testkit` and cannot be imported.
+Unit-test the handler with a one-method fake of `btpingo.OnPremCaller` / `btpingo.OnPremMutator` in its own `handler_test.go` (pattern: [`examples/invoicesync/handler_test.go`](examples/invoicesync/handler_test.go)). When the handler's behaviour depends on what the real `Service` does (CSRF handshake, the one 401 retry, the response size limit, the same-origin redirect policy), use `btpingotest.HandlerCaller` instead: it serves a fake SAP (an `http.Handler`) over loopback and shares those code paths, no SAP needed (see `Test_Handler_ViaHandlerCaller` in [`examples/adtdiscovery/handler_test.go`](examples/adtdiscovery/handler_test.go)). `btpingotest.NewXSUAA` is a mock XSUAA that issues tokens the real `ginpingo.JWT` validates, for router-level tests (`Test_Router_WithMockXSUAA` in the same file). Both are test-only; never import `btpingotest` from production code.
 
 ---
 
@@ -605,7 +605,8 @@ The full test file shows three cases worth copying into your own handler tests:
 2. **Validation fails before SAP** — an invalid payload must 400 **without ever calling `CallOnPremise`** (the test asserts the fake was not invoked).
 3. **On-prem error surfaces as 502** — when the fake returns an error, the handler responds 502, not 500.
 
-If you need to exercise the three-leg token dance end-to-end (destination lookup + XSUAA client_credentials + Connectivity token + Cloud Connector proxy), the heavier `httptest.NewServer` pattern is in [`btpingo`'s `service_test.go`](https://github.com/hochfrequenz/btpingo/blob/v0.1.0/service_test.go); fakes for your own handler tests live next to each example handler in `examples/*/handler_test.go`, not in an importable `btpingo/internal/testkit` — that package is unexported by design.
+One-method fakes are for handler unit tests. When you want the real `Service` behaviour (CSRF, 401 retry, size limit, redirect policy) without SAP, wrap a fake SAP `http.Handler` in `btpingotest.HandlerCaller` (example: `Test_Handler_ViaHandlerCaller` in [`examples/adtdiscovery/handler_test.go`](examples/adtdiscovery/handler_test.go)); `btpingotest.NewXSUAA` adds a mock XSUAA for router-level tests.
+The three-leg token dance itself (destination lookup + XSUAA client_credentials + Connectivity token + Cloud Connector proxy) is covered by `btpingo`'s own tests, not yours.
 For everyday handler work the interface-plus-fake pattern above is faster and more targeted.
 
 ---
@@ -989,7 +990,9 @@ This is a health probe, **not an RPC implementation or a replacement for the tem
 `.github/workflows/deploy.yml` deploys both apps on every **published GitHub Release** (not on push-to-main, not on plain tag pushes — only the explicit "Publish release" click). "Both apps" assumes the approuter is kept — see ["Do you need the approuter?"](#do-you-need-the-approuter). The workflow has two jobs:
 
 1. **`gate`** — `go vet`, `go test ./... -race`, `golangci-lint`, `gofmt --diff`. All four must pass green.
-2. **`deploy`** — only runs if `gate` was green. Cross-compiles a static Linux binary on the runner (same `make build-linux` a laptop would run), injects build metadata via `-ldflags` (`version`, `commit`, `branch`, `build_date`), installs `cf` v8, pushes backend and approuter per `manifest.yml` (backend is already `binary_buildpack` with `command: ./bin/server`, approuter keeps `nodejs_buildpack`), then smoke-tests `/healthz` (app is up) and `/version` (ldflags were actually injected — `commit` must not equal `"unknown"`), and fails the workflow if either check doesn't pass.
+2. **`deploy`** — only runs if `gate` was green. Cross-compiles a static Linux binary on the runner (same `make build-linux` a laptop would run), injects build metadata via `-ldflags` (`version`, `commit`, `branch`, `build_date`, all from `.github/scripts/build-info.sh`: version is the release tag, branch is `main` for a release cut from `main` and never `HEAD` or a SHA), installs `cf` v8, pushes backend and approuter per `manifest.yml` (backend is already `binary_buildpack` with `command: ./bin/server`, approuter keeps `nodejs_buildpack`), then smoke-tests `/healthz` (app is up) and `/version` (ldflags were actually injected — `commit` must not equal `"unknown"`), and fails the workflow if either check doesn't pass.
+
+A fork that is a public module can warm `proxy.golang.org` after a release with `GOPROXY=proxy.golang.org go list -m <module>@<tag>`; a private fork can't (the proxy cannot fetch it).
 
 ### Required repository secrets
 
