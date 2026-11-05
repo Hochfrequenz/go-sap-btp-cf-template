@@ -1,6 +1,10 @@
 name: golangci-lint
 on:
   pull_request:
+  # Also on main, so every commit a release can be cut from has a lint result of its own.
+  push:
+    branches: [main]
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
