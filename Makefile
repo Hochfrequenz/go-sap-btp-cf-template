@@ -5,10 +5,13 @@ BINARY   := bin/server
 PKG      := ./cmd/server
 PKG_PATH := $(shell head -1 go.mod | awk '{print $$2}')/cmd/server
 
-VERSION   := $(shell git describe --tags --always 2>/dev/null || echo dev)
-COMMIT    := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
-BRANCH    := $(shell git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)
-BUILDDATE := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+# One rule for version/commit/branch/date, shared with the CI workflows.
+BUILD_INFO := $(shell bash .github/scripts/build-info.sh)
+build_info = $(patsubst $(1)=%,%,$(filter $(1)=%,$(BUILD_INFO)))
+VERSION   := $(call build_info,version)
+COMMIT    := $(call build_info,commit)
+BRANCH    := $(call build_info,branch)
+BUILDDATE := $(call build_info,build_date)
 
 LDFLAGS := -X main.version=$(VERSION) \
            -X main.commit=$(COMMIT) \
