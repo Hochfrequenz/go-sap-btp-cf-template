@@ -4,17 +4,19 @@
 !!! RUN THIS ONCE PER DEPLOY. NEVER IN A LOOP, NEVER FROM CRON OR A WATCH COMMAND. !!!
 
 SAP USER LOCKOUT WARNING: with --with-sap, the call to /api/adt-discovery reaches the SAP system.
-The Go service then logs on with the technical user stored in the BTP destination. A wrong or
-expired destination password is retried by every such call, and SAP locks the user after a few failed
-logons, which takes down every consumer of that user. The default run (without --with-sap) never
-reaches SAP, but still keep it to one run: there is deliberately no retry logic. If a call fails,
-fix the cause before running again.
+The Go service then logs on with the technical user stored in the BTP destination. With a wrong or
+expired destination password, ONE such call can cost TWO failed SAP logons: btpingo re-reads the
+destination and retries once on a 401 (btpingo v0.5.0 service.go). SAP locks the user after a few
+failed logons, which takes down every consumer of that user. The default run (without --with-sap)
+never reaches SAP, but still keep it to one run: there is deliberately no retry logic. If a call
+fails, fix the cause before running again.
 
 What it does (one call per endpoint, no retries, nothing is changed):
-  1. reads `cf env <app>` and extracts the XSUAA credentials in memory only,
-  2. fetches one client_credentials token,
-  3. GET /healthz                 (no auth),
-  4. GET /version                 (no auth; checked against --expect-version if given),
+  1. `cf app <app>` to derive the route (skipped with --host),
+  2. GET /healthz                 (no auth),
+  3. GET /version                 (no auth; checked against --expect-version if given),
+  4. `cf env <app>`: extracts the XSUAA credentials in memory only, then fetches one
+     client_credentials token,
   5. GET /api/me                  (JWT-guarded, answered by the Go service itself, does NOT reach SAP),
   6. GET /api/adt-discovery       (JWT-guarded, REACHES SAP; only with --with-sap),
   and exits non-zero at the first failure.
@@ -54,9 +56,11 @@ _OPENER = urllib.request.build_opener(_NoRedirect)
 
 def run_cf(*args):
     try:
-        return subprocess.run(["cf", *args], capture_output=True, text=True, check=True).stdout
+        return subprocess.run(["cf", *args], capture_output=True, text=True, check=True, timeout=60).stdout
     except FileNotFoundError:
         sys.exit("cf CLI not found in PATH")
+    except subprocess.TimeoutExpired:
+        sys.exit(f"`cf {args[0]}` timed out after 60s; check your network and `cf login`")
     except subprocess.CalledProcessError as e:
         sys.exit(f"`cf {args[0]}` failed (exit {e.returncode}); are you logged in and targeting the right space?")
 
@@ -79,7 +83,7 @@ def xsuaa_credentials(app):
 
 def default_host(app):
     out = run_cf("app", app)
-    m = re.search(r"^routes:\s+(\S+?)(?:,|\s|$)", out, re.MULTILINE)
+    m = re.search(r"^routes:[ \t]+(\S+?)(?:,|\s|$)", out, re.MULTILINE)
     if not m:
         sys.exit(f"cannot derive the route from `cf app {app}`; pass --host")
     return m.group(1)
@@ -103,6 +107,8 @@ def http(url, headers=None, data=None):
 
 
 def get_token(cred):
+    if "clientsecret" not in cred:
+        sys.exit("the xsuaa binding has no clientsecret (x509 binding?); this script supports client-secret bindings only")
     basic = base64.b64encode(f"{cred['clientid']}:{cred['clientsecret']}".encode()).decode()
     status, body = http(
         cred["url"].rstrip("/") + "/oauth/token",

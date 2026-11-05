@@ -10,6 +10,7 @@
 # `apply-config` rewrites: go.mod, every Go import path, manifest.yml
 # service bindings, xs-security.json xsappname, vars.example.yml,
 # web/package.json name field, .github/workflows/deploy.yml env block,
+# the DEFAULT_APP literal in scripts/smoke-btp.py,
 # and the destination-name literal across examples/**/*.go.
 #
 # The README prose stays HF-flavoured on purpose; it documents the
