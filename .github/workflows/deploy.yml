@@ -7,7 +7,11 @@ name: Deploy to BTP on release
 on:
   release:
     types: [published]
-  workflow_dispatch: # manual trigger for smoke-testing the pipeline
+  workflow_dispatch: # manual trigger for smoke-testing the pipeline and for rollback (--ref vPREVIOUS)
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -77,8 +81,9 @@ jobs:
 
       - name: Cross-compile static Linux/amd64 binary
         env:
-          # empty on workflow_dispatch: build-info.sh then falls back to git describe
-          TAG: ${{ github.event.release.tag_name }}
+          # release: the tag. workflow_dispatch from a tag ref (rollback, README §"Release and rollback"):
+          # that tag. Otherwise empty and build-info.sh falls back to git describe.
+          TAG: ${{ github.event.release.tag_name || (github.ref_type == 'tag' && github.ref_name) || '' }}
           # build-info.sh names a tag checkout after the default branch (no origin/HEAD after checkout)
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         # CGO_ENABLED=0 avoids a C toolchain dependency on the runner
@@ -145,7 +150,7 @@ jobs:
       # targets the backend host (README §"Do you need the approuter?").
       - name: Smoke test — /healthz + /version
         env:
-          TAG: ${{ github.event.release.tag_name }}
+          TAG: ${{ github.event.release.tag_name || (github.ref_type == 'tag' && github.ref_name) || '' }}
         run: |
           base="https://${BACKEND_HOST}-web.${DOMAIN}"
           echo "GET $base/healthz (expect 200 ok)"

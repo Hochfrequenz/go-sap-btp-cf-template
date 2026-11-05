@@ -182,6 +182,7 @@ func singleFileRewriters() []Rewriter {
 		{Name: "web/package.json", Path: "web/package.json", Transform: transformPackageJson},
 		{Name: ".github/workflows/deploy.yml", Path: ".github/workflows/deploy.yml", Transform: transformDeployYml},
 		{Name: "cmd/server/main.go", Path: "cmd/server/main.go", Transform: transformServerMainGo},
+		{Name: "scripts/smoke-btp.py", Path: "scripts/smoke-btp.py", Transform: transformSmokeBtpPy},
 	}
 }
 
@@ -352,6 +353,17 @@ func transformDeployYml(old []byte, cfg *Config) ([]byte, error) {
 		result = re.ReplaceAll(result, []byte("${1}: "+s.newValue))
 	}
 	return result, nil
+}
+
+// transformSmokeBtpPy rewrites the DEFAULT_APP literal (the CF app name
+// the smoke script targets when --app is not given) to app.name. The
+// anchor is the line-start `DEFAULT_APP = "..."` assignment.
+func transformSmokeBtpPy(old []byte, cfg *Config) ([]byte, error) {
+	re := regexp.MustCompile(`(?m)^DEFAULT_APP = "[^"\r\n]*"`)
+	if !re.Match(old) {
+		return nil, errors.New(`scripts/smoke-btp.py: no top-level DEFAULT_APP = "..." line found`)
+	}
+	return re.ReplaceAllLiteral(old, []byte(fmt.Sprintf("DEFAULT_APP = %q", cfg.App.Name))), nil
 }
 
 // readWithOverride returns overrides[path] if present, else reads path

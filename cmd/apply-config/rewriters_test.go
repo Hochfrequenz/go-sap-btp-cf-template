@@ -521,6 +521,7 @@ func Test_Run_ServerMainGoSurvivesBothOverlappingRewriters(t *testing.T) {
 	writeFile("vars.example.yml", "backend-host: go-btp-mwe\ndomain: cfapps.eu10.hana.ondemand.com\n")
 	writeFile("web/package.json", `{"name":"go-btp-mwe-web"}`)
 	writeFile(".github/workflows/deploy.yml", "env:\n  CF_API: x\n  CF_ORG: x\n  CF_SPACE: x\n  BACKEND_HOST: x\n  DOMAIN: x\n")
+	writeFile("scripts/smoke-btp.py", "DEFAULT_APP = \"go-btp-mwe\"\n")
 	writeFile("cmd/server/main.go", `package main
 
 import (
@@ -564,4 +565,25 @@ func Test_transformVarsExampleYml_PreservesCRLFLineEndings(t *testing.T) {
 			t.Errorf("missing exact byte sequence %q; got:\n%q", want, string(out))
 		}
 	}
+}
+
+func Test_transformSmokeBtpPy_RewritesDefaultApp(t *testing.T) {
+	in := []byte("import sys\nDEFAULT_APP = \"go-btp-mwe\"\nprint(DEFAULT_APP)\n")
+	out, err := transformSmokeBtpPy(in, testConfig())
+	then.AssertThat(t, err, is.Nil())
+	then.AssertThat(t, string(out), is.EqualTo("import sys\nDEFAULT_APP = \"acme-app\"\nprint(DEFAULT_APP)\n"))
+	again, err := transformSmokeBtpPy(out, testConfig())
+	then.AssertThat(t, err, is.Nil())
+	then.AssertThat(t, string(again), is.EqualTo(string(out)))
+}
+
+func Test_transformSmokeBtpPy_PreservesCRLFLineEndings(t *testing.T) {
+	out, err := transformSmokeBtpPy([]byte("DEFAULT_APP = \"go-btp-mwe\"\r\nx = 1\r\n"), testConfig())
+	then.AssertThat(t, err, is.Nil())
+	then.AssertThat(t, string(out), is.EqualTo("DEFAULT_APP = \"acme-app\"\r\nx = 1\r\n"))
+}
+
+func Test_transformSmokeBtpPy_MissingLine(t *testing.T) {
+	_, err := transformSmokeBtpPy([]byte("APP = 'x'\n"), testConfig())
+	then.AssertThat(t, err, is.Not(is.Nil()))
 }
