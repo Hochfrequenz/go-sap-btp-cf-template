@@ -85,6 +85,7 @@ turn it off — but nothing about the backend requires it, and a fork is free to
   `cf create-service-key go-xsuaa <key>`, then `cf service-key go-xsuaa <key>`) and call
   `https://((backend-host)).((domain))/api/...` with `Authorization: Bearer <token>`. The backend
   checks signature, audience and expiry (`btpingo`'s `auth.go`) the same way either way.
+- Only tokens issued to **this app's own XSUAA client** are accepted: `btpingo` checks `aud` against the app's client ID only (`jwt.WithAudience(xsuaa.ClientID)` in [`auth.go`](https://github.com/hochfrequenz/btpingo/blob/v0.5.0/auth.go), v0.5.0). A token issued to another XSUAA client (e.g. another app that was given authority via `grant-as-authority-to-apps`) is rejected with 401 today, unlike SAP's Java library, which also accepts the xsappname. This is tracked upstream in [btpingo#27](https://github.com/Hochfrequenz/btpingo/issues/27) / [#30](https://github.com/Hochfrequenz/btpingo/issues/30). Until that lands, forks have those callers fetch a token with a service key of this app's own XSUAA instance instead.
 - Such a token carries no user: `user_name`/`email` claims are absent, Principal Propagation has no
   user JWT to forward, and `/api/docs` can no longer be opened in a browser.
 - Writes that carry a body must still be JSON (`application/json` or `application/*+json`; see [JSON-only writes](#json-only-writes)).
@@ -139,7 +140,7 @@ library-intent surface is documented at [pkg.go.dev/github.com/hochfrequenz/btpi
 ## Using this repo as a template
 
 All per-deployment string values (app name, Go module path, CF subaccount coordinates, service instance names, **OpenAPI title/version**, **example-handler destination name**) live in a single [`config.yml`](config.yml) at the repo root.
-`cmd/apply-config` is a small Go tool that reads that file, type-checks every field, and rewrites the rest of the tree from it - `go.mod`, every Go import, `manifest.yml`, `xs-security.json`, `vars.example.yml`, `web/package.json`, `.github/workflows/deploy.yml`, the `huma.DefaultConfig(...)` title/version call in `cmd/server/main.go`, and the destination-name literal across `examples/**/*.go`.
+`cmd/apply-config` is a small Go tool that reads that file, type-checks every field, and rewrites the rest of the tree from it - `go.mod`, every Go import, `manifest.yml`, `xs-security.json`, `vars.example.yml`, `web/package.json`, `.github/workflows/deploy.yml`, the `DEFAULT_APP` literal in `scripts/smoke-btp.py`, the `huma.DefaultConfig(...)` title/version call in `cmd/server/main.go`, and the destination-name literal across `examples/**/*.go`.
 
 > **Using AI assistance to navigate this template?** Start with [`CLAUDE.md`](CLAUDE.md) at the repo root - rules + pointers an AI assistant reads on every prompt to stay on-rails (handler placement, forbidden patterns, where things live). The README stays the human-facing reference; `CLAUDE.md` is its AI-facing companion.
 
@@ -1027,6 +1028,35 @@ The alternative — `cf login --sso` with a temporary passcode — is interactiv
 ### What the manifest does vs. what CI does
 
 The committed `manifest.yml` declares `buildpacks: [binary_buildpack]` with `command: ./bin/server`, so a manual laptop-side `cf push` and the GitHub runner's push do the same thing. Both paths build `./bin/server` first — the CD workflow on the runner, a developer via `make build-linux` / `scripts\build.ps1`. No `-b` / `-c` override flags, no code divergence between manual and automated deploys.
+
+### Release and rollback
+
+**Cut a release** (as a user, not from a workflow: a release created with the `GITHUB_TOKEN` triggers no workflows, so the deploy would never run):
+
+```sh
+gh release create vX.Y.Z --target main --generate-notes
+```
+
+**Watch** the `Deploy to BTP on release` run (`gh run watch`): `gate` first, then `deploy`, whose last step is the smoke test of `/healthz` and `/version` (it fails the run if `/version` does not report the release tag).
+
+**Check afterwards:**
+
+```sh
+curl -fsS https://<approuter-host>.<domain>/healthz            # ok
+curl -fsS https://<approuter-host>.<domain>/version            # "version" is the tag you just released
+cf login && python3 scripts/smoke-btp.py --expect-version vX.Y.Z
+```
+
+> **Run `scripts/smoke-btp.py` once per deploy, never in a loop.** It reads the XSUAA credentials from `cf env` in memory only (never printed or stored), fetches one `client_credentials` token and calls `/healthz`, `/version` and `GET /api/me` once each, stopping at the first failure. `--with-sap` adds `GET /api/adt-discovery`, the one call that **reaches SAP** and logs on with the destination's technical user. Every such call retries a wrong or expired destination password, and SAP locks the user after a few failed logons (**SAP user lockout**). If a call fails, fix the cause before running it again. `--app` defaults to the app name from `config.yml` (`apply-config` rewrites the `DEFAULT_APP` literal).
+
+**Roll back** by redeploying the previous tag. `deploy.yml` has `workflow_dispatch`, and run from a tag ref it checks out that tag, so the build, the gate and `/version` all refer to the old release:
+
+```sh
+gh workflow run deploy.yml --ref vPREVIOUS
+gh run watch
+```
+
+Pick a tag that already contains a `deploy.yml` with `workflow_dispatch` (GitHub runs the workflow file of the chosen ref). The run does not touch service instances: XSUAA, destination and `xs-security.json` changes made since are not rolled back. Then **fix forward**: merge the fix and cut a patch release (`vX.Y.Z+1`). Do not leave the rollback as the long-term state.
 
 ## Local development
 
