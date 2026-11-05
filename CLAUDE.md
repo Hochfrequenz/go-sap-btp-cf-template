@@ -19,11 +19,12 @@ Many fork-authors here are SAP-fluent (ABAP / cockpit / Cloud Connector) but not
    - gin handlers: `ginpingo.AbortError(c, status, code, userMessage, underlyingErr)`. Codes live in `btpingo`'s `httperr.go`.
    - huma handlers: `huma.Error5xx*("user-safe message")`. The classifier `btpingo.ClassifyOnPremError(err)` returns the right kind+detail for the err path; `btpingo.OnPremNon2xxDetail(status)` for the non-2xx-from-SAP path.
 7. **Destination name comes from config**, not a fresh literal. The constant `destinationName = "..."` in your handler is rewritten by `apply-config` from `examples.destination_name` in `config.yml`. Don't hardcode a different literal — `apply-config` won't catch it.
-8. **Tests use a one-method fake.**
+8. **Tests use a one-method fake** (handler unit tests).
    - gin: copy `examples/invoicesync/handler_test.go`'s `fakeOnPrem`.
    - huma: copy `examples/adtdiscovery/handler_test.go`'s `fakeCaller`.
    - mutating: copy `examples/adtcheckrun/handler_test.go`'s `fakeMutator`.
      The CSRF dance is the Service's concern, fully tested in `btpingo`'s `service_csrf_test.go`. Handler tests do not stub it.
+   - When you want the real Service behaviour (CSRF, 401 retry, size limit, redirect policy) without SAP, use `btpingotest.HandlerCaller` around a fake SAP `http.Handler` (example: `Test_Handler_ViaHandlerCaller` in `examples/adtdiscovery/handler_test.go`; `btpingotest.NewXSUAA` mocks XSUAA for router tests). Test-only, never import `btpingotest` in production code.
 9. **Add a `// FORK:` comment** at the destination-name constant (mirroring `examples/adtdiscovery/handler.go:107`) if your handler is intended as a fork crib-sheet.
 
 ## Forbidden patterns (CI gates these where marked)
@@ -43,7 +44,7 @@ Many fork-authors here are SAP-fluent (ABAP / cockpit / Cloud Connector) but not
 | `cmd/server/main.go`                | wiring, route registration, JWT validator setup     | Construction site for `*btpingo.Service`. The only place `*btpingo.Service` is allowed.                                                                                                                                                |
 | `cmd/apply-config/`                 | fork-time string rewriter                           | Only rewrites this repo's own module path; does not touch `btpingo`. Adds new walkers when a new template-coupled literal lands.                                                                                                       |
 | `github.com/hochfrequenz/btpingo`   | library-intent surface (external module)            | What handlers may depend on is listed at [pkg.go.dev/.../btpingo](https://pkg.go.dev/github.com/hochfrequenz/btpingo) (`doc.go`) and [.../ginpingo](https://pkg.go.dev/github.com/hochfrequenz/btpingo/ginpingo) for the Gin adapters. |
-| `examples/`                         | handler crib-sheets                                 | Each example is self-contained: `handler.go` + `handler_test.go`. Tests use one-method fakes.                                                                                                                                          |
+| `examples/`                         | handler crib-sheets                                 | Each example is self-contained: `handler.go` + `handler_test.go`. Tests use one-method fakes (or `btpingotest.HandlerCaller`).                                                                                                                                          |
 | `web/`                              | SAP approuter (Node.js)                             | Only `xs-app.json` and `package.json` typically need editing. On by default but optional — see `web/README.md` / README §"Do you need the approuter?" before assuming a fork needs it.                                                 |
 | `docs/btp-deploy-walkthrough.de.md` | chronological deploy diary                          | German + HF-flavoured. Has a "Since-section" at the bottom; new substantive PRs land an entry there.                                                                                                                                   |
 | `docs/abap-backend-playbook.md`     | building your own ABAP HTTP API for the Go app      | Read before writing the ABAP half: conventions both halves share, SAP pitfalls, copyable ABAP code.                                                                                                                                    |

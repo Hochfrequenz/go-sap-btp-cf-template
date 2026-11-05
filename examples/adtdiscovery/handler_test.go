@@ -17,6 +17,8 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/hochfrequenz/btpingo"
+	"github.com/hochfrequenz/btpingo/btpingotest"
+	"github.com/hochfrequenz/btpingo/ginpingo"
 
 	"github.com/hochfrequenz/go-sap-btp-cf-template/examples/adtdiscovery"
 )
@@ -263,4 +265,116 @@ func Test_Register_AppearsInOpenAPISpec(t *testing.T) {
 	body := w.Body.String()
 	then.AssertThat(t, strings.Contains(body, "/adt-discovery"), is.True())
 	then.AssertThat(t, strings.Contains(body, "adt-discovery"), is.True())
+}
+
+// newRouterFor is newRouter for any OnPremCaller (here a HandlerCaller).
+func newRouterFor(caller btpingo.OnPremCaller) *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	adtdiscovery.Register(humagin.NewWithGroup(r, r.Group(""), huma.DefaultConfig("test", "0.0.0")), caller)
+	return r
+}
+
+// sapDiscoveryServer is a fake SAP: it answers 401 on the first request (as
+// an ICF does when a session has expired) and serves the discovery document
+// from then on. It also records what reached it.
+func sapDiscoveryServer(hits *int, gotAccept *string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		*hits++
+		*gotAccept = r.Header.Get("Accept")
+		if *hits == 1 {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/atomsvc+xml")
+		_, _ = io.WriteString(w, sapDiscoveryXML)
+	})
+}
+
+// Test_Handler_ViaHandlerCaller drives the handler through
+// btpingotest.HandlerCaller instead of a one-method fake. HandlerCaller
+// serves a fake SAP (an http.Handler) over a loopback port and shares
+// btpingo's real Service code paths: header filtering, the one 401 retry,
+// the response size limit, the redirect policy and the CSRF handshake. Use it
+// when the handler's behaviour depends on those; the one-method fakes above
+// stay the default for plain handler logic.
+func Test_Handler_ViaHandlerCaller(t *testing.T) {
+	t.Run("401 is retried once and the typed JSON comes out", func(t *testing.T) {
+		var hits int
+		var gotAccept string
+		// "HF_S4" is rewritten by apply-config like the handler's literal.
+		caller, err := btpingotest.NewHandlerCaller(sapDiscoveryServer(&hits, &gotAccept),
+			btpingotest.WithDestinationName("HF_S4"))
+		then.AssertThat(t, err, is.Nil())
+		t.Cleanup(caller.Close)
+
+		rec := httptest.NewRecorder()
+		newRouterFor(caller).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/adt-discovery", nil))
+
+		then.AssertThat(t, rec.Code, is.EqualTo(http.StatusOK))
+		then.AssertThat(t, hits, is.EqualTo(2))
+		then.AssertThat(t, gotAccept, is.EqualTo("application/atomsvc+xml"))
+		var got adtdiscovery.Response
+		then.AssertThat(t, json.Unmarshal(rec.Body.Bytes(), &got), is.Nil())
+		then.AssertThat(t, len(got.Workspaces), is.EqualTo(2))
+	})
+
+	t.Run("a response over the size limit is a 502", func(t *testing.T) {
+		hits, gotAccept := 1, "" // start at 1 so the fake SAP answers 200 immediately (no 401 first)
+		caller, err := btpingotest.NewHandlerCaller(sapDiscoveryServer(&hits, &gotAccept),
+			btpingotest.WithDestinationName("HF_S4"),
+			btpingotest.WithResponseSizeLimit(64))
+		then.AssertThat(t, err, is.Nil())
+		t.Cleanup(caller.Close)
+
+		rec := httptest.NewRecorder()
+		newRouterFor(caller).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/adt-discovery", nil))
+
+		then.AssertThat(t, rec.Code, is.EqualTo(http.StatusBadGateway))
+		then.AssertThat(t, hits, is.EqualTo(2))
+		then.AssertThat(t, strings.Contains(rec.Body.String(), "reading on-premise response body failed"), is.True())
+	})
+}
+
+// Test_Router_WithMockXSUAA shows the mock XSUAA next to HandlerCaller: the
+// production auth middleware (ginpingo.JWT with a real btpingo.JWTValidator)
+// validates a token the mock issued, in front of the handler.
+func Test_Router_WithMockXSUAA(t *testing.T) {
+	const clientID = "sb-demo!t1"
+	xsuaa, err := btpingotest.NewXSUAA(btpingotest.XSUAAConfig{
+		XSAppName:   "demo!t1",
+		AppClientID: clientID,
+		Clients: []btpingotest.XSUAAClient{
+			{ClientID: clientID, Secret: "secret", Scopes: []string{"demo!t1.User"}},
+		},
+	})
+	then.AssertThat(t, err, is.Nil())
+	srv := httptest.NewServer(xsuaa)
+	t.Cleanup(srv.Close)
+	validator, err := btpingo.NewJWTValidator(t.Context(), xsuaa.Credentials(srv.URL))
+	then.AssertThat(t, err, is.Nil())
+
+	hits, gotAccept := 1, "" // start at 1 so the fake SAP answers 200 immediately (no 401 first)
+	caller, err := btpingotest.NewHandlerCaller(sapDiscoveryServer(&hits, &gotAccept),
+		btpingotest.WithDestinationName("HF_S4"))
+	then.AssertThat(t, err, is.Nil())
+	t.Cleanup(caller.Close)
+
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	api := r.Group("/api")
+	api.Use(ginpingo.JWT(validator))
+	adtdiscovery.Register(humagin.NewWithGroup(r, api, huma.DefaultConfig("test", "0.0.0")), caller)
+
+	noToken := httptest.NewRecorder()
+	r.ServeHTTP(noToken, httptest.NewRequest(http.MethodGet, "/api/adt-discovery", nil))
+	then.AssertThat(t, noToken.Code, is.EqualTo(http.StatusUnauthorized))
+
+	token, err := xsuaa.MintToken(clientID)
+	then.AssertThat(t, err, is.Nil())
+	req := httptest.NewRequest(http.MethodGet, "/api/adt-discovery", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	withToken := httptest.NewRecorder()
+	r.ServeHTTP(withToken, req)
+	then.AssertThat(t, withToken.Code, is.EqualTo(http.StatusOK))
 }

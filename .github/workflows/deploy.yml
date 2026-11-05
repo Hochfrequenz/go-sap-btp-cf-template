@@ -67,12 +67,20 @@ jobs:
     # silently pushing with empty credentials.
     steps:
       - uses: actions/checkout@v7
+        with:
+          # full history: build-info.sh needs origin/<default branch> to name the branch of a tag checkout
+          fetch-depth: 0
 
       - uses: actions/setup-go@v7
         with:
           go-version: 1.27.x
 
       - name: Cross-compile static Linux/amd64 binary
+        env:
+          # empty on workflow_dispatch: build-info.sh then falls back to git describe
+          TAG: ${{ github.event.release.tag_name }}
+          # build-info.sh names a tag checkout after the default branch (no origin/HEAD after checkout)
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         # CGO_ENABLED=0 avoids a C toolchain dependency on the runner
         # and produces a fully-static binary the binary_buildpack
         # launches with no glibc version coupling. Same command that
@@ -80,13 +88,17 @@ jobs:
         run: |
           mkdir -p bin
           MODULE=$(head -1 go.mod | awk '{print $2}')
-          VERSION=$(git describe --tags --always 2>/dev/null || echo dev)
-          COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
-          BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)
-          BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          while IFS='=' read -r key value; do
+            case "$key" in
+              version) VERSION=$value ;;
+              commit) COMMIT=$value ;;
+              branch) BRANCH=$value ;;
+              build_date) BUILD_DATE=$value ;;
+            esac
+          done < <(bash .github/scripts/build-info.sh "$TAG")
           echo "module=${MODULE} version=${VERSION} commit=${COMMIT} branch=${BRANCH} date=${BUILD_DATE}"
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-            -ldflags "-X main.version=${VERSION} -X main.commit=${COMMIT} -X main.branch=${BRANCH} -X main.buildDate=${BUILD_DATE}" \
+            -ldflags "-X 'main.version=${VERSION}' -X 'main.commit=${COMMIT}' -X 'main.branch=${BRANCH}' -X 'main.buildDate=${BUILD_DATE}'" \
             -o bin/server ./cmd/server
           file bin/server
           ls -lh bin/server
@@ -132,6 +144,8 @@ jobs:
       # Targets the approuter host; a fork that dropped the approuter
       # targets the backend host (README §"Do you need the approuter?").
       - name: Smoke test — /healthz + /version
+        env:
+          TAG: ${{ github.event.release.tag_name }}
         run: |
           base="https://${BACKEND_HOST}-web.${DOMAIN}"
           echo "GET $base/healthz (expect 200 ok)"
@@ -143,7 +157,11 @@ jobs:
           version_body=$(curl -fsS --retry 3 --retry-all-errors --retry-delay 3 "$base/version")
           echo "$version_body"
           echo "$version_body" | grep -q '"commit"' || { echo "::error::/version missing commit field"; exit 1; }
+          echo "$version_body" | grep -Eq '"branch":"(HEAD|[0-9a-f]{40})"' && { echo "::error::branch is HEAD or a SHA"; exit 1; }
           echo "$version_body" | grep -vq '"commit":"unknown"' || { echo "::error::ldflags not injected — commit is still 'unknown'"; exit 1; }
+          if [ -n "$TAG" ]; then
+            echo "$version_body" | grep -Fq "\"version\":\"$TAG\"" || { echo "::error::/version does not report release tag $TAG"; exit 1; }
+          fi
           echo "::notice::Deploy green — /healthz and /version both passed"
 
       - name: cf logout (always)

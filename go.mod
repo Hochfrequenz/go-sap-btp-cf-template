@@ -8,12 +8,12 @@ require (
 	github.com/gin-gonic/gin v1.12.0
 	github.com/goccy/go-yaml v1.19.2
 	github.com/golang-jwt/jwt/v5 v5.3.1
-	github.com/hochfrequenz/btpingo v0.4.0
+	github.com/hochfrequenz/btpingo v0.5.0
 )
 
 require (
-	github.com/MicahParks/jwkset v0.11.3 // indirect
-	github.com/MicahParks/keyfunc/v3 v3.8.2 // indirect
+	github.com/MicahParks/jwkset v0.11.4 // indirect
+	github.com/MicahParks/keyfunc/v3 v3.9.1 // indirect
 	github.com/bytedance/gopkg v0.1.4 // indirect
 	github.com/bytedance/sonic v1.15.4 // indirect
 	github.com/bytedance/sonic/loader v0.5.3 // indirect
